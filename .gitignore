@@ -1,0 +1,15 @@
+## Build output
+[Bb]in/
+[Oo]bj/
+*.user
+*.userosscache
+*.sln.docstates
+
+## IDE & Editors
+.vs/
+.idea/
+.vscode/
+
+## BepInEx config / log files
+*.log
+PlantsRandomizer_Mapping_*.txt

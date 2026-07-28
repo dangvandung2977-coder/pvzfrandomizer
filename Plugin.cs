@@ -11,7 +11,7 @@ using Il2CppSystem.Collections.Generic;
 
 namespace PlantsRandomizer
 {
-    [BepInPlugin("com.duong.pvzfusion.plantsrandomizer", "Plants Randomizer", "1.3.0")]
+    [BepInPlugin("com.duong.pvzfusion.plantsrandomizer", "Plants Randomizer", "1.4.0")]
     public class Plugin : BasePlugin
     {
         public static ManualLogSource LogSource = null!;
@@ -22,7 +22,7 @@ namespace PlantsRandomizer
             LogSource = Log;
             IncludeColoredCards = Config.Bind("General", "IncludeColoredCards", true, "Include base game special/colored card plants in post-adventure reward pool.");
 
-            Log.LogInfo("Plants Randomizer Mod v1.3.0 initializing...");
+            Log.LogInfo("Plants Randomizer Mod v1.4.0 initializing...");
 
             try
             {
@@ -40,7 +40,7 @@ namespace PlantsRandomizer
     [HarmonyPatch]
     public static class AwardPatches
     {
-        private const string CONFIG_VERSION = "1.3.0";
+        private const string CONFIG_VERSION = "1.4.0";
         private static readonly object Sync = new object();
         private static bool _initialized = false;
         private static string _activeProfile = string.Empty;
@@ -123,22 +123,41 @@ namespace PlantsRandomizer
 
         public static string GetCurrentProfileKey()
         {
+            string baseName = "default";
+
             try
             {
-                string name = GameAPP.playerName;
-                if (!string.IsNullOrEmpty(name)) return name;
-
-                string key = SaveInfo.LAST_SAVE_KEY;
-                if (!string.IsNullOrEmpty(key)) return key;
-
-                if (SaveInfo.Instance != null && !string.IsNullOrEmpty(SaveInfo.Instance.FilePath))
+                if (!string.IsNullOrEmpty(GameAPP.playerName))
                 {
-                    return Path.GetFileNameWithoutExtension(SaveInfo.Instance.FilePath);
+                    baseName = GameAPP.playerName;
+                }
+                else if (!string.IsNullOrEmpty(SaveInfo.LAST_SAVE_KEY))
+                {
+                    baseName = SaveInfo.LAST_SAVE_KEY;
+                }
+                else if (SaveInfo.Instance != null && !string.IsNullOrEmpty(SaveInfo.Instance.FilePath))
+                {
+                    baseName = Path.GetFileNameWithoutExtension(SaveInfo.Instance.FilePath);
                 }
             }
             catch { }
 
-            return "default";
+            try
+            {
+                if (SaveInfo.Instance != null && !string.IsNullOrEmpty(SaveInfo.Instance.FilePath))
+                {
+                    string filePath = SaveInfo.Instance.FilePath;
+                    if (File.Exists(filePath))
+                    {
+                        DateTime cTime = File.GetCreationTimeUtc(filePath);
+                        string fileName = Path.GetFileNameWithoutExtension(filePath);
+                        return $"{baseName}_{fileName}_{cTime.Ticks}";
+                    }
+                }
+            }
+            catch { }
+
+            return baseName;
         }
 
         private static int GenerateUniqueRandomSeed()
@@ -243,7 +262,7 @@ namespace PlantsRandomizer
                 }
             }
 
-            // Generate a fresh unique random seed per profile mapping creation
+            // Generate a fresh unique random seed per save profile instance
             int seed = savedSeed != 0 ? savedSeed : GenerateUniqueRandomSeed();
             System.Random rand = new System.Random(seed);
 

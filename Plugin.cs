@@ -11,7 +11,7 @@ using Il2CppSystem.Collections.Generic;
 
 namespace PlantsRandomizer
 {
-    [BepInPlugin("com.duong.pvzfusion.plantsrandomizer", "Plants Randomizer", "1.2.0")]
+    [BepInPlugin("com.duong.pvzfusion.plantsrandomizer", "Plants Randomizer", "1.3.0")]
     public class Plugin : BasePlugin
     {
         public static ManualLogSource LogSource = null!;
@@ -22,7 +22,7 @@ namespace PlantsRandomizer
             LogSource = Log;
             IncludeColoredCards = Config.Bind("General", "IncludeColoredCards", true, "Include base game special/colored card plants in post-adventure reward pool.");
 
-            Log.LogInfo("Plants Randomizer Mod v1.2.0 initializing...");
+            Log.LogInfo("Plants Randomizer Mod v1.3.0 initializing...");
 
             try
             {
@@ -40,7 +40,7 @@ namespace PlantsRandomizer
     [HarmonyPatch]
     public static class AwardPatches
     {
-        private const string CONFIG_VERSION = "1.2.0";
+        private const string CONFIG_VERSION = "1.3.0";
         private static readonly object Sync = new object();
         private static bool _initialized = false;
         private static string _activeProfile = string.Empty;
@@ -378,36 +378,16 @@ namespace PlantsRandomizer
                 return true;
             }
 
-            // LilyPad: Unlocked when Pool1 is completed
+            // LilyPad: Unlocked ONLY when Pool1 (3-1) is completed
             if (plantType == PlantType.LilyPad)
             {
-                if (IsLevelCompleted(AdvantureLevel.Pool1)) return true;
-
-                // Unlock LilyPad if any plant positioned after LilyPad in grid (ID > 12) is already unlocked
-                foreach (var kvp in LevelToPlantMap)
-                {
-                    if ((int)kvp.Value > 12 && IsLevelCompleted(kvp.Key))
-                    {
-                        return true;
-                    }
-                }
-                return false;
+                return IsLevelCompleted(AdvantureLevel.Pool1);
             }
 
-            // Pot: Unlocked when Roof1 is completed
+            // Pot: Unlocked ONLY when Roof1 (5-1) is completed
             if (plantType == PlantType.Pot)
             {
-                if (IsLevelCompleted(AdvantureLevel.Roof1)) return true;
-
-                // Unlock Pot if any plant positioned at or after Pot in grid (ID >= 27) is already unlocked
-                foreach (var kvp in LevelToPlantMap)
-                {
-                    if ((int)kvp.Value >= 27 && IsLevelCompleted(kvp.Key))
-                    {
-                        return true;
-                    }
-                }
-                return false;
+                return IsLevelCompleted(AdvantureLevel.Roof1);
             }
 
             // Standard plants: Unlocked ONLY if their mapped level in LevelToPlantMap is COMPLETED

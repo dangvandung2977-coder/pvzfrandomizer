@@ -11,7 +11,7 @@ using Il2CppSystem.Collections.Generic;
 
 namespace PlantsRandomizer
 {
-    [BepInPlugin("com.duong.pvzfusion.plantsrandomizer", "Plants Randomizer", "1.0.0")]
+    [BepInPlugin("com.duong.pvzfusion.plantsrandomizer", "Plants Randomizer", "1.1.0")]
     public class Plugin : BasePlugin
     {
         public static ManualLogSource LogSource = null!;
@@ -22,7 +22,7 @@ namespace PlantsRandomizer
             LogSource = Log;
             IncludeColoredCards = Config.Bind("General", "IncludeColoredCards", true, "Include base game special/colored card plants in post-adventure reward pool.");
 
-            Log.LogInfo("Plants Randomizer Mod v1.0.0 initializing...");
+            Log.LogInfo("Plants Randomizer Mod v1.1.0 initializing...");
 
             try
             {
@@ -40,19 +40,24 @@ namespace PlantsRandomizer
     [HarmonyPatch]
     public static class AwardPatches
     {
-        private const string CONFIG_VERSION = "1.0.0";
+        private const string CONFIG_VERSION = "1.1.0";
         private static readonly object Sync = new object();
         private static bool _initialized = false;
         private static string _activeProfile = string.Empty;
         public static readonly System.Collections.Generic.Dictionary<AdvantureLevel, PlantType> LevelToPlantMap = new();
 
-        // Fixed Level Rewards required for terrain progression:
-        // Pool1 (Level 3-1) -> LilyPad (ID 12)
-        // Roof1 (Level 5-1) -> Pot (ID 27)
-        public static readonly System.Collections.Generic.Dictionary<AdvantureLevel, PlantType> FixedLevelRewards = new()
+        // Special levels that unlock gameplay functions (e.g. Shovel at Day4) or fixed terrain (LilyPad at Pool1, Pot at Roof1).
+        // These levels MUST NOT give any extra random plant reward.
+        public static readonly System.Collections.Generic.HashSet<AdvantureLevel> ExcludedSpecialLevels = new()
         {
-            { AdvantureLevel.Pool1, PlantType.LilyPad },
-            { AdvantureLevel.Roof1, PlantType.Pot }
+            AdvantureLevel.Pool1,      // 3-1: Fixed LilyPad
+            AdvantureLevel.Roof1,      // 5-1: Fixed Pot
+            AdvantureLevel.Day4,       // 1-4: Function Shovel (Xẻng)
+            AdvantureLevel.Day_sub1,   // Function / Mail
+            AdvantureLevel.Night5,     // 2-5: Minigame
+            AdvantureLevel.Pool5,      // 3-5: Minigame
+            AdvantureLevel.Roof5,      // 5-5: Minigame
+            AdvantureLevel.Roof6       // 5-10: Final Boss Trophy
         };
 
         public static PlantType[] CreateBasicPlantPool()
@@ -179,12 +184,6 @@ namespace PlantsRandomizer
         {
             LevelToPlantMap.Clear();
 
-            // Set fixed terrain rewards first
-            foreach (var kvp in FixedLevelRewards)
-            {
-                LevelToPlantMap[kvp.Key] = kvp.Value;
-            }
-
             string configPath = GetConfigPath(profileKey);
             bool includeColored = Plugin.IncludeColoredCards != null ? Plugin.IncludeColoredCards.Value : true;
 
@@ -215,14 +214,14 @@ namespace PlantsRandomizer
                             int.TryParse(trimmed.Substring(idx + 1), out int plantVal))
                         {
                             AdvantureLevel lvl = (AdvantureLevel)levelVal;
-                            if (!FixedLevelRewards.ContainsKey(lvl))
+                            if (!ExcludedSpecialLevels.Contains(lvl))
                             {
                                 LevelToPlantMap[lvl] = (PlantType)plantVal;
                             }
                         }
                     }
 
-                    if (isVersionValid && LevelToPlantMap.Count >= 80)
+                    if (isVersionValid && LevelToPlantMap.Count >= 30)
                     {
                         Plugin.LogSource?.LogInfo($"Loaded {LevelToPlantMap.Count} plant reward mappings for profile [{profileKey}] from {configPath}");
                         return;
@@ -230,10 +229,6 @@ namespace PlantsRandomizer
 
                     Plugin.LogSource?.LogInfo($"Config file for profile [{profileKey}] is outdated or invalid. Regenerating v{CONFIG_VERSION} mapping...");
                     LevelToPlantMap.Clear();
-                    foreach (var kvp in FixedLevelRewards)
-                    {
-                        LevelToPlantMap[kvp.Key] = kvp.Value;
-                    }
                 }
                 catch (Exception ex)
                 {
@@ -250,7 +245,7 @@ namespace PlantsRandomizer
             foreach (var lvlObj in levelValues)
             {
                 AdvantureLevel lvl = (AdvantureLevel)lvlObj;
-                if (!FixedLevelRewards.ContainsKey(lvl))
+                if (!ExcludedSpecialLevels.Contains(lvl))
                 {
                     allLevels.Add(lvl);
                 }
@@ -318,7 +313,7 @@ namespace PlantsRandomizer
                 StringBuilder sb = new StringBuilder();
                 sb.AppendLine($"# Version: {CONFIG_VERSION}");
                 sb.AppendLine("# PlantsRandomizer per-account level->plant mapping (Base Game Cards Only)");
-                sb.AppendLine("# Fixed levels: Pool1 (3-1) -> LilyPad, Roof1 (5-1) -> Pot");
+                sb.AppendLine("# Function & Fixed terrain levels excluded from random plant rewards.");
                 foreach (var kvp in LevelToPlantMap)
                 {
                     sb.AppendLine($"{(int)kvp.Key}={(int)kvp.Value}");
@@ -363,11 +358,13 @@ namespace PlantsRandomizer
         {
             if (GameAPP.developerMode) return true;
 
+            // At start of Level 1-1, player ONLY has Peashooter (0) and Sunflower (1)
             if (plantType == PlantType.Peashooter || plantType == PlantType.SunFlower)
             {
                 return true;
             }
 
+            // LilyPad: Unlocked when Pool1 is completed
             if (plantType == PlantType.LilyPad)
             {
                 if (IsLevelCompleted(AdvantureLevel.Pool1)) return true;
@@ -383,6 +380,7 @@ namespace PlantsRandomizer
                 return false;
             }
 
+            // Pot: Unlocked when Roof1 is completed
             if (plantType == PlantType.Pot)
             {
                 if (IsLevelCompleted(AdvantureLevel.Roof1)) return true;
@@ -398,6 +396,7 @@ namespace PlantsRandomizer
                 return false;
             }
 
+            // Standard plants: Unlocked ONLY if their mapped level in LevelToPlantMap is COMPLETED
             bool isMapped = false;
             bool anyCompleted = false;
 

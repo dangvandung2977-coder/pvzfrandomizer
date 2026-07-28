@@ -12,7 +12,7 @@ using Il2CppInterop.Runtime.InteropTypes.Arrays;
 
 namespace PlantsRandomizer
 {
-    [BepInPlugin("com.duong.pvzfusion.plantsrandomizer", "Plants Randomizer", "2.0.0")]
+    [BepInPlugin("com.duong.pvzfusion.plantsrandomizer", "Plants Randomizer", "2.1.0")]
     public class Plugin : BasePlugin
     {
         public static ManualLogSource LogSource = null!;
@@ -24,7 +24,7 @@ namespace PlantsRandomizer
             LogSource = Log;
             IncludeColoredCards = Config.Bind("General", "IncludeColoredCards", true, "Include base game special/colored card plants in post-adventure reward pool.");
 
-            Log.LogInfo("Plants Randomizer Mod v2.0.0 (Shop, Coins, Rental & Gacha) initializing...");
+            Log.LogInfo("Plants Randomizer Mod v2.1.0 (Shop, Coins, Rental & Gacha) initializing...");
 
             try
             {
@@ -134,31 +134,36 @@ namespace PlantsRandomizer
 
         private void OnGUI()
         {
-            AwardPatches.EnsureInitialized();
-            var data = AwardPatches.CurrentData;
-
-            // Draw Coin HUD
-            GUI.Box(new Rect(10, 10, 230, 45), string.Empty);
-            if (_coinTex != null)
+            try
             {
-                GUI.DrawTexture(new Rect(15, 12, 40, 40), _coinTex);
+                AwardPatches.EnsureInitialized();
+                var data = AwardPatches.CurrentData;
+
+                // Draw Coin HUD Top Left
+                GUI.Box(new Rect(20, 20, 250, 50), string.Empty);
+                if (_coinTex != null)
+                {
+                    GUI.DrawTexture(new Rect(25, 23, 44, 44), _coinTex);
+                }
+                GUI.Label(new Rect(75, 30, 190, 30), $"<b><color=yellow>Coins: {data.Coins} 🪙</color></b>");
+
+                if (GUI.Button(new Rect(280, 20, 150, 50), _showWindow ? "✖ Đóng Shop [F3]" : "🛒 CỬA HÀNG [F3]"))
+                {
+                    _showWindow = !_showWindow;
+                }
+
+                if (!string.IsNullOrEmpty(_lastNotification))
+                {
+                    GUI.Box(new Rect(Screen.width / 2 - 220, 20, 440, 50), string.Empty);
+                    GUI.Label(new Rect(Screen.width / 2 - 210, 32, 420, 30), $"<b><color=lime>✨ {_lastNotification}</color></b>");
+                }
+
+                if (_showWindow)
+                {
+                    _windowRect = GUI.Window(9928, _windowRect, (GUI.WindowFunction)DrawShopWindow, "🛒 Plants Randomizer - Gacha & Shop Center");
+                }
             }
-            GUI.Label(new Rect(60, 20, 175, 30), $"<b><color=yellow>Fusion Coins: {data.Coins}</color></b>");
-
-            if (GUI.Button(new Rect(250, 12, 130, 40), _showWindow ? "Đóng Shop [F3]" : "🛒 Gacha Shop [F3]"))
-            {
-                _showWindow = !_showWindow;
-            }
-
-            if (!string.IsNullOrEmpty(_lastNotification))
-            {
-                GUI.Box(new Rect(Screen.width / 2 - 220, 20, 440, 45), string.Empty);
-                GUI.Label(new Rect(Screen.width / 2 - 210, 30, 420, 30), $"<b><color=lime>✨ {_lastNotification}</color></b>");
-            }
-
-            if (!_showWindow) return;
-
-            _windowRect = GUI.Window(9928, _windowRect, (GUI.WindowFunction)DrawShopWindow, "🛒 Plants Randomizer - Gacha & Shop Center");
+            catch { }
         }
 
         private void DrawShopWindow(int windowID)
@@ -179,15 +184,15 @@ namespace PlantsRandomizer
 
             if (_selectedTab == 0)
             {
-                DrawGachaTab(data);
+                DrawGachaTab();
             }
             else if (_selectedTab == 1)
             {
-                DrawRentalTab(data);
+                DrawRentalTab();
             }
             else if (_selectedTab == 2)
             {
-                DrawInventoryTab(data);
+                DrawInventoryTab();
             }
 
             GUILayout.FlexibleSpace();
@@ -197,8 +202,10 @@ namespace PlantsRandomizer
             }
         }
 
-        private void DrawGachaTab(ProfileData data)
+        private void DrawGachaTab()
         {
+            var data = AwardPatches.CurrentData;
+
             if (_bannerTex != null)
             {
                 Rect bannerRect = GUILayoutUtility.GetRect(640, 160);
@@ -251,8 +258,10 @@ namespace PlantsRandomizer
             GUILayout.EndHorizontal();
         }
 
-        private void DrawRentalTab(ProfileData data)
+        private void DrawRentalTab()
         {
+            var data = AwardPatches.CurrentData;
+
             GUILayout.Box("⏳ Cửa Hàng Cho Thuê Cây - Thuê Cây Dùng Cho 1 Trận Đấu (30 Coins/Cây)");
             GUILayout.Space(10);
 
@@ -299,8 +308,10 @@ namespace PlantsRandomizer
             GUILayout.EndScrollView();
         }
 
-        private void DrawInventoryTab(ProfileData data)
+        private void DrawInventoryTab()
         {
+            var data = AwardPatches.CurrentData;
+
             GUILayout.Box($"📦 Danh sách cây đã mở khóa qua Gacha ({data.UnlockedGachaPlants.Count} cây)");
             GUILayout.Space(10);
 
@@ -317,7 +328,7 @@ namespace PlantsRandomizer
     [HarmonyPatch]
     public static class AwardPatches
     {
-        private const string CONFIG_VERSION = "2.0.0";
+        private const string CONFIG_VERSION = "2.1.0";
         private static readonly object Sync = new object();
         private static bool _initialized = false;
         private static string _activeProfile = string.Empty;

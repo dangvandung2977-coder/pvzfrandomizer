@@ -318,7 +318,18 @@ namespace PlantsRandomizer
                 catch { }
             }
 
-            if (seed == 0) seed = Guid.NewGuid().GetHashCode() ^ Environment.TickCount ^ (int)DateTime.UtcNow.Ticks;
+            if (seed == 0)
+            {
+                seed = Guid.NewGuid().GetHashCode() ^ Environment.TickCount ^ (int)DateTime.UtcNow.Ticks;
+                try
+                {
+                    if (SaveInfo.Instance != null && !string.IsNullOrEmpty(SaveInfo.Instance.FilePath) && File.Exists(SaveInfo.Instance.FilePath))
+                    {
+                        seed ^= (int)(File.GetCreationTimeUtc(SaveInfo.Instance.FilePath).Ticks & 0x7FFFFFFF);
+                    }
+                }
+                catch { }
+            }
             var rand = new System.Random(seed);
 
             var levels = new List<AdvantureLevel>();

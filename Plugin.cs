@@ -11,7 +11,7 @@ using Il2CppSystem.Collections.Generic;
 
 namespace PlantsRandomizer
 {
-    [BepInPlugin("com.duong.pvzfusion.plantsrandomizer", "Plants Randomizer", "1.1.0")]
+    [BepInPlugin("com.duong.pvzfusion.plantsrandomizer", "Plants Randomizer", "1.2.0")]
     public class Plugin : BasePlugin
     {
         public static ManualLogSource LogSource = null!;
@@ -22,7 +22,7 @@ namespace PlantsRandomizer
             LogSource = Log;
             IncludeColoredCards = Config.Bind("General", "IncludeColoredCards", true, "Include base game special/colored card plants in post-adventure reward pool.");
 
-            Log.LogInfo("Plants Randomizer Mod v1.1.0 initializing...");
+            Log.LogInfo("Plants Randomizer Mod v1.2.0 initializing...");
 
             try
             {
@@ -40,7 +40,7 @@ namespace PlantsRandomizer
     [HarmonyPatch]
     public static class AwardPatches
     {
-        private const string CONFIG_VERSION = "1.1.0";
+        private const string CONFIG_VERSION = "1.2.0";
         private static readonly object Sync = new object();
         private static bool _initialized = false;
         private static string _activeProfile = string.Empty;
@@ -141,16 +141,14 @@ namespace PlantsRandomizer
             return "default";
         }
 
-        private static int GetDeterministicSeed(string profileKey)
+        private static int GenerateUniqueRandomSeed()
         {
             unchecked
             {
-                int hash = (int)2166136261;
-                foreach (char c in profileKey)
-                {
-                    hash = (hash ^ c) * 16777619;
-                }
-                return hash;
+                int hash1 = Guid.NewGuid().GetHashCode();
+                int hash2 = Environment.TickCount;
+                int hash3 = (int)DateTime.UtcNow.Ticks;
+                return hash1 ^ hash2 ^ hash3;
             }
         }
 
@@ -187,6 +185,8 @@ namespace PlantsRandomizer
             string configPath = GetConfigPath(profileKey);
             bool includeColored = Plugin.IncludeColoredCards != null ? Plugin.IncludeColoredCards.Value : true;
 
+            int savedSeed = 0;
+
             if (File.Exists(configPath))
             {
                 try
@@ -206,6 +206,13 @@ namespace PlantsRandomizer
                             continue;
                         }
 
+                        if (trimmed.StartsWith("# Seed:"))
+                        {
+                            string seedStr = trimmed.Substring("# Seed:".Length).Trim();
+                            int.TryParse(seedStr, out savedSeed);
+                            continue;
+                        }
+
                         if (string.IsNullOrEmpty(trimmed) || trimmed.StartsWith("#")) continue;
 
                         int idx = trimmed.IndexOf('=');
@@ -214,7 +221,7 @@ namespace PlantsRandomizer
                             int.TryParse(trimmed.Substring(idx + 1), out int plantVal))
                         {
                             AdvantureLevel lvl = (AdvantureLevel)levelVal;
-                            if (!ExcludedSpecialLevels.Contains(lvl))
+                            if (!ExcludedSpecialLevels.Contains(lvl) && (int)lvl >= 1 && (int)lvl <= 100)
                             {
                                 LevelToPlantMap[lvl] = (PlantType)plantVal;
                             }
@@ -236,8 +243,8 @@ namespace PlantsRandomizer
                 }
             }
 
-            // Derive deterministic seed per profile key
-            int seed = GetDeterministicSeed(profileKey);
+            // Generate a fresh unique random seed per profile mapping creation
+            int seed = savedSeed != 0 ? savedSeed : GenerateUniqueRandomSeed();
             System.Random rand = new System.Random(seed);
 
             Array levelValues = Enum.GetValues(typeof(AdvantureLevel));
@@ -245,7 +252,11 @@ namespace PlantsRandomizer
             foreach (var lvlObj in levelValues)
             {
                 AdvantureLevel lvl = (AdvantureLevel)lvlObj;
-                if (!ExcludedSpecialLevels.Contains(lvl))
+                int lvlNum = (int)lvl;
+
+                // STRICT FILTER: Only include valid playable Adventure levels (lvlNum >= 1 && lvlNum <= 100).
+                // Exclude Default (0) and challenge/endless level enum entries.
+                if (lvlNum >= 1 && lvlNum <= 100 && !ExcludedSpecialLevels.Contains(lvl))
                 {
                     allLevels.Add(lvl);
                 }
@@ -289,7 +300,7 @@ namespace PlantsRandomizer
                 LevelToPlantMap[lvl] = chosenPlant;
             }
 
-            SaveMapping(configPath);
+            SaveMapping(configPath, seed);
             Plugin.LogSource?.LogInfo($"Generated new v{CONFIG_VERSION} random plant reward mapping (seed: {seed}, basic: {basicPool.Count}, base game special/colored: {coloredPool.Count}) for profile [{profileKey}] ({LevelToPlantMap.Count} levels).");
         }
 
@@ -306,12 +317,13 @@ namespace PlantsRandomizer
             }
         }
 
-        private static void SaveMapping(string configPath)
+        private static void SaveMapping(string configPath, int seed)
         {
             try
             {
                 StringBuilder sb = new StringBuilder();
                 sb.AppendLine($"# Version: {CONFIG_VERSION}");
+                sb.AppendLine($"# Seed: {seed}");
                 sb.AppendLine("# PlantsRandomizer per-account level->plant mapping (Base Game Cards Only)");
                 sb.AppendLine("# Function & Fixed terrain levels excluded from random plant rewards.");
                 foreach (var kvp in LevelToPlantMap)
@@ -333,6 +345,8 @@ namespace PlantsRandomizer
                 if (GameAPP.developerMode) return true;
 
                 int lvlNum = (int)lvl;
+                if (lvlNum <= 0) return false;
+
                 var advCompleted = GameAPP.advLevelCompleted;
                 if (advCompleted != null && lvlNum >= 0 && lvlNum < advCompleted.Length)
                 {

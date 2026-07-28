@@ -212,11 +212,10 @@ namespace PlantsRandomizer
                 if (SaveInfo.Instance != null && !string.IsNullOrEmpty(SaveInfo.Instance.FilePath))
                 {
                     string fp = SaveInfo.Instance.FilePath;
-                    if (File.Exists(fp))
+                    if (!string.IsNullOrEmpty(fp))
                     {
                         string fn = Path.GetFileNameWithoutExtension(fp);
-                        long ticks = File.GetCreationTimeUtc(fp).Ticks;
-                        return $"{baseName}_{fn}_{ticks}";
+                        return $"{baseName}_{fn}";
                     }
                 }
             }
@@ -298,7 +297,7 @@ namespace PlantsRandomizer
                     foreach (string line in File.ReadAllLines(configPath))
                     {
                         string t = line.Trim();
-                        if (t.StartsWith("# Version:") && t.Contains(CONFIG_VERSION)) valid = true;
+                        if (t.StartsWith("# Version:")) valid = true;
                         if (t.StartsWith("# Seed:")) int.TryParse(t.Substring("# Seed:".Length).Trim(), out seed);
                         if (string.IsNullOrEmpty(t) || t.StartsWith("#")) continue;
                         int eq = t.IndexOf('=');

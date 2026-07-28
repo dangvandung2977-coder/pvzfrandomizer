@@ -1,6 +1,7 @@
 using System;
 using System.IO;
 using System.Text;
+using System.Reflection;
 using System.Collections.Generic;
 using BepInEx;
 using BepInEx.Logging;
@@ -8,23 +9,22 @@ using BepInEx.Unity.IL2CPP;
 using HarmonyLib;
 using UnityEngine;
 using Il2CppInterop.Runtime.Injection;
-using Il2CppInterop.Runtime.InteropTypes.Arrays;
 
 namespace PlantsRandomizer
 {
-    [BepInPlugin("com.duong.pvzfusion.plantsrandomizer", "Plants Randomizer", "2.1.0")]
+    [BepInPlugin("com.duong.pvzfusion.plantsrandomizer", "Plants Randomizer", "1.0.0")]
     public class Plugin : BasePlugin
     {
         public static ManualLogSource LogSource = null!;
         public static BepInEx.Configuration.ConfigEntry<bool> IncludeColoredCards = null!;
-        public static ShopUIManager ShopInstance = null!;
+        public static BonusUIManager BonusUIInstance = null!;
 
         public override void Load()
         {
             LogSource = Log;
             IncludeColoredCards = Config.Bind("General", "IncludeColoredCards", true, "Include base game special/colored card plants in post-adventure reward pool.");
 
-            Log.LogInfo("Plants Randomizer Mod v2.1.0 (Shop, Coins, Rental & Gacha) initializing...");
+            Log.LogInfo("Plants Randomizer Mod v1.0.0 initializing...");
 
             try
             {
@@ -36,708 +36,332 @@ namespace PlantsRandomizer
             {
                 Log.LogError($"Failed to register Harmony patches: {ex}");
             }
-
-            try
-            {
-                ClassInjector.RegisterTypeInIl2Cpp<ShopUIManager>();
-                GameObject shopObj = new GameObject("PlantsRandomizerShopUI");
-                UnityEngine.Object.DontDestroyOnLoad(shopObj);
-                ShopInstance = shopObj.AddComponent<ShopUIManager>();
-                Log.LogInfo("ShopUIManager UI Component registered and created successfully!");
-            }
-            catch (Exception ex)
-            {
-                Log.LogWarning($"Could not register ShopUIManager component: {ex.Message}");
-            }
         }
     }
 
     public class ProfileData
     {
-        public int Coins = 200;
-        public int TotalRolls = 0;
-        public System.Collections.Generic.HashSet<int> UnlockedGachaPlants = new System.Collections.Generic.HashSet<int>();
-        public System.Collections.Generic.HashSet<int> RentedPlants = new System.Collections.Generic.HashSet<int>();
+        public int TotalWins = 0;
+        public HashSet<int> BonusUnlockedPlants = new HashSet<int>();
     }
 
-    public class ShopUIManager : MonoBehaviour
+    // Lightweight Notification Toast Manager - 0% button obstruction
+    public class BonusUIManager : MonoBehaviour
     {
-        private bool _showWindow = false;
-        private Rect _windowRect = new Rect(Screen.width / 2 - 330, Screen.height / 2 - 275, 660, 550);
-        private int _selectedTab = 0; // 0 = Gacha, 1 = Rental Shop, 2 = Inventory
-        private string _lastNotification = string.Empty;
-        private float _notifTimer = 0f;
-        private Vector2 _scrollPos = Vector2.zero;
+        public static string LastNotif = string.Empty;
+        public static float NotifTimer = 0f;
 
-        private Texture2D _bannerTex = null!;
-        private Texture2D _coinTex = null!;
-
-        public ShopUIManager(IntPtr ptr) : base(ptr) { }
-
-        private void Start()
-        {
-            LoadGUITextures();
-        }
-
-        private void LoadGUITextures()
-        {
-            try
-            {
-                string assetsDir = Path.Combine(Paths.PluginPath, "PlantsRandomizer_Assets");
-                string bannerPath = Path.Combine(assetsDir, "gacha_banner_bg.png");
-                string coinPath = Path.Combine(assetsDir, "fusion_coin_icon.png");
-
-                if (File.Exists(bannerPath))
-                {
-                    byte[] bData = File.ReadAllBytes(bannerPath);
-                    Il2CppStructArray<byte> ilBannerData = bData;
-                    _bannerTex = new Texture2D(2, 2, TextureFormat.RGBA32, false);
-                    ImageConversion.LoadImage(_bannerTex, ilBannerData);
-                }
-
-                if (File.Exists(coinPath))
-                {
-                    byte[] cData = File.ReadAllBytes(coinPath);
-                    Il2CppStructArray<byte> ilCoinData = cData;
-                    _coinTex = new Texture2D(2, 2, TextureFormat.RGBA32, false);
-                    ImageConversion.LoadImage(_coinTex, ilCoinData);
-                }
-            }
-            catch (Exception ex)
-            {
-                Plugin.LogSource?.LogWarning($"Error loading GUI textures: {ex.Message}");
-            }
-        }
+        public BonusUIManager(IntPtr ptr) : base(ptr) { }
 
         private void Update()
         {
-            if (Input.GetKeyDown(KeyCode.F3))
+            if (NotifTimer > 0)
             {
-                _showWindow = !_showWindow;
-            }
-
-            if (_notifTimer > 0)
-            {
-                _notifTimer -= Time.deltaTime;
-                if (_notifTimer <= 0)
-                {
-                    _lastNotification = string.Empty;
-                }
+                NotifTimer -= Time.deltaTime;
+                if (NotifTimer <= 0) LastNotif = string.Empty;
             }
         }
 
-        public void ShowNotification(string msg, float duration = 4.0f)
+        public static void ShowNotif(string msg, float dur = 6f)
         {
-            _lastNotification = msg;
-            _notifTimer = duration;
+            LastNotif = msg;
+            NotifTimer = dur;
         }
 
         private void OnGUI()
         {
             try
             {
-                AwardPatches.EnsureInitialized();
-                var data = AwardPatches.CurrentData;
-
-                // Draw Coin HUD Top Left
-                GUI.Box(new Rect(20, 20, 250, 50), string.Empty);
-                if (_coinTex != null)
+                if (NotifTimer > 0 && !string.IsNullOrEmpty(LastNotif))
                 {
-                    GUI.DrawTexture(new Rect(25, 23, 44, 44), _coinTex);
-                }
-                GUI.Label(new Rect(75, 30, 190, 30), $"<b><color=yellow>Coins: {data.Coins} 🪙</color></b>");
-
-                if (GUI.Button(new Rect(280, 20, 150, 50), _showWindow ? "✖ Đóng Shop [F3]" : "🛒 CỬA HÀNG [F3]"))
-                {
-                    _showWindow = !_showWindow;
-                }
-
-                if (!string.IsNullOrEmpty(_lastNotification))
-                {
-                    GUI.Box(new Rect(Screen.width / 2 - 220, 20, 440, 50), string.Empty);
-                    GUI.Label(new Rect(Screen.width / 2 - 210, 32, 420, 30), $"<b><color=lime>✨ {_lastNotification}</color></b>");
-                }
-
-                if (_showWindow)
-                {
-                    _windowRect = GUI.Window(9928, _windowRect, (GUI.WindowFunction)DrawShopWindow, "🛒 Plants Randomizer - Gacha & Shop Center");
+                    GUI.Box(new Rect(Screen.width / 2 - 300, 15, 600, 46), string.Empty);
+                    GUI.Label(new Rect(Screen.width / 2 - 290, 23, 580, 30), $"<b><size=14><color=yellow>{LastNotif}</color></size></b>");
                 }
             }
             catch { }
-        }
-
-        private void DrawShopWindow(int windowID)
-        {
-            GUI.DragWindow(new Rect(0, 0, 660, 25));
-
-            var data = AwardPatches.CurrentData;
-
-            GUILayout.BeginHorizontal();
-            if (GUILayout.Button("🎰 Quay Gacha Banner", GUILayout.Height(35))) _selectedTab = 0;
-            if (GUILayout.Button("⏳ Thuê Cây Theo Trận", GUILayout.Height(35))) _selectedTab = 1;
-            if (GUILayout.Button("📦 Cây Đã Mở Khóa", GUILayout.Height(35))) _selectedTab = 2;
-            GUILayout.EndHorizontal();
-
-            GUILayout.Space(10);
-            GUILayout.Label($"<b>Số dư: <color=yellow>🪙 {data.Coins} Coins</color></b>  |  <b>Tổng lượt quay: <color=cyan>{data.TotalRolls}</color></b>");
-            GUILayout.Space(10);
-
-            if (_selectedTab == 0)
-            {
-                DrawGachaTab();
-            }
-            else if (_selectedTab == 1)
-            {
-                DrawRentalTab();
-            }
-            else if (_selectedTab == 2)
-            {
-                DrawInventoryTab();
-            }
-
-            GUILayout.FlexibleSpace();
-            if (GUILayout.Button("Đóng Cửa Hàng [F3]", GUILayout.Height(32)))
-            {
-                _showWindow = false;
-            }
-        }
-
-        private void DrawGachaTab()
-        {
-            var data = AwardPatches.CurrentData;
-
-            if (_bannerTex != null)
-            {
-                Rect bannerRect = GUILayoutUtility.GetRect(640, 160);
-                GUI.DrawTexture(bannerRect, _bannerTex);
-            }
-            else
-            {
-                GUILayout.Box("🎰 Gacha Banner - Mở Khóa Cây Vĩnh Viễn\n🟢 Common (60%) | 🔵 Rare (30%) | 🟡 Legendary/Ultimate (10%)");
-            }
-
-            GUILayout.Space(15);
-
-            GUILayout.BeginHorizontal();
-            if (GUILayout.Button("🎲 Quay 1 Lần (100 Coins)", GUILayout.Height(50)))
-            {
-                if (data.Coins >= 100)
-                {
-                    data.Coins -= 100;
-                    data.TotalRolls++;
-                    PlantType rolled = AwardPatches.DoGachaRoll(data);
-                    ShowNotification($"Quay trúng: [{rolled}]!");
-                    AwardPatches.SaveCurrentData();
-                }
-                else
-                {
-                    ShowNotification("❌ Bạn không đủ Coins! (Cần 100 Coins)");
-                }
-            }
-
-            if (GUILayout.Button("🎰 Quay 10 Lần (900 Coins)", GUILayout.Height(50)))
-            {
-                if (data.Coins >= 900)
-                {
-                    data.Coins -= 900;
-                    data.TotalRolls += 10;
-                    System.Collections.Generic.List<string> results = new System.Collections.Generic.List<string>();
-                    for (int i = 0; i < 10; i++)
-                    {
-                        PlantType rolled = AwardPatches.DoGachaRoll(data);
-                        results.Add(rolled.ToString());
-                    }
-                    ShowNotification($"10x Roll: {string.Join(", ", results)}");
-                    AwardPatches.SaveCurrentData();
-                }
-                else
-                {
-                    ShowNotification("❌ Bạn không đủ Coins! (Cần 900 Coins)");
-                }
-            }
-            GUILayout.EndHorizontal();
-        }
-
-        private void DrawRentalTab()
-        {
-            var data = AwardPatches.CurrentData;
-
-            GUILayout.Box("⏳ Cửa Hàng Cho Thuê Cây - Thuê Cây Dùng Cho 1 Trận Đấu (30 Coins/Cây)");
-            GUILayout.Space(10);
-
-            _scrollPos = GUILayout.BeginScrollView(_scrollPos, GUILayout.Height(280));
-            
-            PlantType[] coloredPool = AwardPatches.CreateColoredPlantPool();
-            foreach (PlantType pt in coloredPool)
-            {
-                int ptId = (int)pt;
-                bool isRented = data.RentedPlants.Contains(ptId);
-                bool isUnlocked = data.UnlockedGachaPlants.Contains(ptId) || AwardPatches.IsPlantUnlockedInternal(pt);
-
-                GUILayout.BeginHorizontal();
-                GUILayout.Label($"{pt} (ID {ptId})", GUILayout.Width(250));
-
-                if (isUnlocked)
-                {
-                    GUILayout.Label("✅ Đã mở khóa", GUILayout.Width(150));
-                }
-                else if (isRented)
-                {
-                    GUILayout.Label("⏳ Đã thuê (1 trận)", GUILayout.Width(150));
-                }
-                else
-                {
-                    if (GUILayout.Button("Thuê 30 Coins", GUILayout.Width(150)))
-                    {
-                        if (data.Coins >= 30)
-                        {
-                            data.Coins -= 30;
-                            data.RentedPlants.Add(ptId);
-                            ShowNotification($"Đã thuê [{pt}] cho trận đấu này!");
-                            AwardPatches.SaveCurrentData();
-                        }
-                        else
-                        {
-                            ShowNotification("❌ Bạn không đủ Coins!");
-                        }
-                    }
-                }
-                GUILayout.EndHorizontal();
-            }
-
-            GUILayout.EndScrollView();
-        }
-
-        private void DrawInventoryTab()
-        {
-            var data = AwardPatches.CurrentData;
-
-            GUILayout.Box($"📦 Danh sách cây đã mở khóa qua Gacha ({data.UnlockedGachaPlants.Count} cây)");
-            GUILayout.Space(10);
-
-            _scrollPos = GUILayout.BeginScrollView(_scrollPos, GUILayout.Height(280));
-            foreach (int ptId in data.UnlockedGachaPlants)
-            {
-                PlantType pt = (PlantType)ptId;
-                GUILayout.Label($"✨ {pt} (ID {ptId})");
-            }
-            GUILayout.EndScrollView();
         }
     }
 
     [HarmonyPatch]
     public static class AwardPatches
     {
-        private const string CONFIG_VERSION = "2.1.0";
+        private const string CONFIG_VERSION = "1.0.0";
         private static readonly object Sync = new object();
         private static bool _initialized = false;
         private static string _activeProfile = string.Empty;
-        public static readonly System.Collections.Generic.Dictionary<AdvantureLevel, PlantType> LevelToPlantMap = new();
+        public static readonly Dictionary<AdvantureLevel, PlantType> LevelToPlantMap = new();
         public static ProfileData CurrentData = new ProfileData();
 
-        public static readonly System.Collections.Generic.HashSet<AdvantureLevel> ExcludedSpecialLevels = new()
+        [HarmonyPostfix, HarmonyPatch(typeof(GameAPP), nameof(GameAPP.Start))]
+        public static void GameAPPStart_Postfix()
         {
-            AdvantureLevel.Pool1,      // 3-1: Fixed LilyPad
-            AdvantureLevel.Roof1,      // 5-1: Fixed Pot
-            AdvantureLevel.Day4,       // 1-4: Function Shovel (Xẻng)
-            AdvantureLevel.Day_sub1,   // Function / Mail
-            AdvantureLevel.Night5,     // 2-5: Minigame
-            AdvantureLevel.Pool5,      // 3-5: Minigame
-            AdvantureLevel.Roof5,      // 5-5: Minigame
-            AdvantureLevel.Roof6       // 5-10: Final Boss Trophy
-        };
+            if (Plugin.BonusUIInstance == null)
+            {
+                try
+                {
+                    ClassInjector.RegisterTypeInIl2Cpp<BonusUIManager>();
+                    GameObject uiObj = new GameObject("PlantsRandomizerBonusUI");
+                    UnityEngine.Object.DontDestroyOnLoad(uiObj);
+                    Plugin.BonusUIInstance = uiObj.AddComponent<BonusUIManager>();
+                    Plugin.LogSource?.LogInfo("BonusUIManager successfully registered!");
+                }
+                catch (Exception ex)
+                {
+                    Plugin.LogSource?.LogError($"Failed to register BonusUIManager: {ex}");
+                }
+            }
+        }
+
+        // Candidate pool for 5-win Bonus rewards (Basic Plants + Food / Special Challenge Plants)
+        public static PlantType[] CreateBonusPlantPool()
+        {
+            var pool = new List<PlantType>();
+            // 1. Basic Plants (IDs 0..47: Peashooter, Sunflower, Wallnut, CherryBomb, PotatoMine, etc.)
+            foreach (var obj in Enum.GetValues(typeof(PlantType)))
+            {
+                PlantType p = (PlantType)obj;
+                int id = (int)p;
+                if (id >= 0 && id <= 47)
+                {
+                    string name = p.ToString();
+                    if (!name.EndsWith("Body") && !name.EndsWith("_land") && !name.EndsWith("_water") && name != "Nothing")
+                        pool.Add(p);
+                }
+            }
+            // 2. Food & Special Challenge Plants (IDs 1000..1999)
+            foreach (var obj in Enum.GetValues(typeof(PlantType)))
+            {
+                PlantType p = (PlantType)obj;
+                int id = (int)p;
+                if (id >= 1000 && id < 2000)
+                {
+                    string name = p.ToString();
+                    if (!name.StartsWith("EnumValue") && !name.EndsWith("Body") && !name.EndsWith("_land") && !name.EndsWith("_water") && name != "Nothing")
+                        pool.Add(p);
+                }
+            }
+            return pool.ToArray();
+        }
+
+        public static PlantType DoBonusReward()
+        {
+            PlantType[] pool = CreateBonusPlantPool();
+            if (pool.Length == 0) return PlantType.Peashooter;
+
+            var candidates = new List<PlantType>();
+            foreach (var p in pool)
+            {
+                if (!CurrentData.BonusUnlockedPlants.Contains((int)p))
+                    candidates.Add(p);
+            }
+            if (candidates.Count == 0) candidates.AddRange(pool);
+
+            var rand = new System.Random(Guid.NewGuid().GetHashCode() ^ Environment.TickCount);
+            PlantType chosen = candidates[rand.Next(candidates.Count)];
+            CurrentData.BonusUnlockedPlants.Add((int)chosen);
+            SaveCurrentData();
+            return chosen;
+        }
+
+        public static PlantType[] GetSuperPlantList()
+        {
+            var list = new List<PlantType>();
+            foreach (var obj in Enum.GetValues(typeof(PlantType)))
+            {
+                PlantType p = (PlantType)obj;
+                int id = (int)p;
+                if (id >= 1000 && id < 2000)
+                {
+                    string name = p.ToString();
+                    if (!name.StartsWith("EnumValue") && !name.EndsWith("Body") && !name.EndsWith("_land") && !name.EndsWith("_water") && name != "Nothing")
+                        list.Add(p);
+                }
+            }
+            return list.ToArray();
+        }
 
         public static PlantType[] CreateBasicPlantPool()
         {
-            System.Collections.Generic.List<PlantType> pool = new System.Collections.Generic.List<PlantType>();
-            Array allValues = Enum.GetValues(typeof(PlantType));
-
-            foreach (var obj in allValues)
+            var pool = new List<PlantType>();
+            foreach (var obj in Enum.GetValues(typeof(PlantType)))
             {
                 PlantType p = (PlantType)obj;
                 int id = (int)p;
-
                 if (id < 0 || id > 47) continue;
-
-                if (p == PlantType.Peashooter || p == PlantType.SunFlower || p == PlantType.LilyPad || p == PlantType.Pot)
-                {
-                    continue;
-                }
-
+                if (p == PlantType.Peashooter || p == PlantType.SunFlower || p == PlantType.LilyPad || p == PlantType.Pot) continue;
                 string name = p.ToString();
-                if (name.EndsWith("Body") || name.EndsWith("_land") || name.EndsWith("_water") || name == "Nothing")
-                {
-                    continue;
-                }
-
+                if (name.EndsWith("Body") || name.EndsWith("_land") || name.EndsWith("_water") || name == "Nothing") continue;
                 pool.Add(p);
             }
-
             return pool.ToArray();
         }
 
-        public static PlantType[] CreateColoredPlantPool()
+        public static readonly HashSet<AdvantureLevel> ExcludedSpecialLevels = new()
         {
-            System.Collections.Generic.List<PlantType> pool = new System.Collections.Generic.List<PlantType>();
-            Array allValues = Enum.GetValues(typeof(PlantType));
-
-            foreach (var obj in allValues)
-            {
-                PlantType p = (PlantType)obj;
-                int id = (int)p;
-
-                bool isSpecialOrColored = (id >= 200 && id <= 299) || (id >= 1000 && id < 2000);
-                if (!isSpecialOrColored) continue;
-
-                if (!Enum.IsDefined(typeof(PlantType), p)) continue;
-
-                string name = p.ToString();
-                if (name.EndsWith("Body") || name.EndsWith("_land") || name.EndsWith("_water") || name == "Nothing" || name.StartsWith("EnumValue"))
-                {
-                    continue;
-                }
-
-                pool.Add(p);
-            }
-
-            return pool.ToArray();
-        }
-
-        public static PlantType DoGachaRoll(ProfileData data)
-        {
-            System.Random rand = new System.Random(Guid.NewGuid().GetHashCode() ^ Environment.TickCount);
-            int roll = rand.Next(100);
-
-            PlantType[] pool;
-            if (roll < 60)
-            {
-                pool = CreateBasicPlantPool();
-            }
-            else
-            {
-                pool = CreateColoredPlantPool();
-            }
-
-            if (pool.Length == 0) pool = CreateBasicPlantPool();
-
-            PlantType chosen = pool[rand.Next(pool.Length)];
-            data.UnlockedGachaPlants.Add((int)chosen);
-            return chosen;
-        }
+            AdvantureLevel.Pool1, AdvantureLevel.Roof1, AdvantureLevel.Day4,
+            AdvantureLevel.Day_sub1, AdvantureLevel.Night5, AdvantureLevel.Pool5,
+            AdvantureLevel.Roof5, AdvantureLevel.Roof6
+        };
 
         public static string GetCurrentProfileKey()
         {
             string baseName = "default";
-
-            try
-            {
-                if (!string.IsNullOrEmpty(GameAPP.playerName))
-                {
-                    baseName = GameAPP.playerName;
-                }
-                else if (!string.IsNullOrEmpty(SaveInfo.LAST_SAVE_KEY))
-                {
-                    baseName = SaveInfo.LAST_SAVE_KEY;
-                }
-                else if (SaveInfo.Instance != null && !string.IsNullOrEmpty(SaveInfo.Instance.FilePath))
-                {
-                    baseName = Path.GetFileNameWithoutExtension(SaveInfo.Instance.FilePath);
-                }
-            }
-            catch { }
-
+            try { if (!string.IsNullOrEmpty(GameAPP.playerName)) baseName = GameAPP.playerName; } catch { }
             try
             {
                 if (SaveInfo.Instance != null && !string.IsNullOrEmpty(SaveInfo.Instance.FilePath))
                 {
-                    string filePath = SaveInfo.Instance.FilePath;
-                    if (File.Exists(filePath))
+                    string fp = SaveInfo.Instance.FilePath;
+                    if (File.Exists(fp))
                     {
-                        DateTime cTime = File.GetCreationTimeUtc(filePath);
-                        string fileName = Path.GetFileNameWithoutExtension(filePath);
-                        return $"{baseName}_{fileName}_{cTime.Ticks}";
+                        string fn = Path.GetFileNameWithoutExtension(fp);
+                        long ticks = File.GetCreationTimeUtc(fp).Ticks;
+                        return $"{baseName}_{fn}_{ticks}";
                     }
                 }
             }
             catch { }
-
             return baseName;
         }
 
-        private static int GenerateUniqueRandomSeed()
+        private static string GetConfigPath(string key)
         {
-            unchecked
-            {
-                int hash1 = Guid.NewGuid().GetHashCode();
-                int hash2 = Environment.TickCount;
-                int hash3 = (int)DateTime.UtcNow.Ticks;
-                return hash1 ^ hash2 ^ hash3;
-            }
+            foreach (char c in Path.GetInvalidFileNameChars()) key = key.Replace(c, '_');
+            return Path.Combine(Paths.ConfigPath, $"PlantsRandomizer_Mapping_{key}.txt");
         }
 
-        private static string GetConfigPath(string profileKey)
+        private static string GetDataPath(string key)
         {
-            if (string.IsNullOrEmpty(profileKey)) profileKey = "default";
-            foreach (char c in Path.GetInvalidFileNameChars())
-            {
-                profileKey = profileKey.Replace(c, '_');
-            }
-            return Path.Combine(Paths.ConfigPath, $"PlantsRandomizer_Mapping_{profileKey}.txt");
-        }
-
-        private static string GetDataPath(string profileKey)
-        {
-            if (string.IsNullOrEmpty(profileKey)) profileKey = "default";
-            foreach (char c in Path.GetInvalidFileNameChars())
-            {
-                profileKey = profileKey.Replace(c, '_');
-            }
-            return Path.Combine(Paths.ConfigPath, $"PlantsRandomizer_Data_{profileKey}.txt");
+            foreach (char c in Path.GetInvalidFileNameChars()) key = key.Replace(c, '_');
+            return Path.Combine(Paths.ConfigPath, $"PlantsRandomizer_Data_{key}.txt");
         }
 
         public static void EnsureInitialized()
         {
-            string currentProfile = GetCurrentProfileKey();
-
-            if (_initialized && _activeProfile == currentProfile) return;
-
+            string profile = GetCurrentProfileKey();
+            if (_initialized && _activeProfile == profile) return;
             lock (Sync)
             {
-                if (_initialized && _activeProfile == currentProfile) return;
-
-                LoadOrGenerateMapping(currentProfile);
-                LoadProfileData(currentProfile);
-                _activeProfile = currentProfile;
+                if (_initialized && _activeProfile == profile) return;
+                LoadOrGenerateMapping(profile);
+                LoadProfileData(profile);
+                _activeProfile = profile;
                 _initialized = true;
             }
         }
 
-        private static void LoadProfileData(string profileKey)
+        private static void LoadProfileData(string key)
         {
             CurrentData = new ProfileData();
-            string dataPath = GetDataPath(profileKey);
-
-            if (File.Exists(dataPath))
+            string path = GetDataPath(key);
+            if (!File.Exists(path)) { SaveCurrentData(); return; }
+            try
             {
-                try
+                foreach (string line in File.ReadAllLines(path))
                 {
-                    string[] lines = File.ReadAllLines(dataPath);
-                    foreach (string line in lines)
-                    {
-                        string trimmed = line.Trim();
-                        if (string.IsNullOrEmpty(trimmed) || trimmed.StartsWith("#")) continue;
-
-                        int idx = trimmed.IndexOf('=');
-                        if (idx > 0)
-                        {
-                            string key = trimmed.Substring(0, idx).Trim();
-                            string val = trimmed.Substring(idx + 1).Trim();
-
-                            if (key == "Coins" && int.TryParse(val, out int c)) CurrentData.Coins = c;
-                            if (key == "TotalRolls" && int.TryParse(val, out int tr)) CurrentData.TotalRolls = tr;
-                            if (key == "UnlockedGachaPlants")
-                            {
-                                foreach (string s in val.Split(new char[] { ',' }, StringSplitOptions.RemoveEmptyEntries))
-                                {
-                                    if (int.TryParse(s.Trim(), out int pid)) CurrentData.UnlockedGachaPlants.Add(pid);
-                                }
-                            }
-                            if (key == "RentedPlants")
-                            {
-                                foreach (string s in val.Split(new char[] { ',' }, StringSplitOptions.RemoveEmptyEntries))
-                                {
-                                    if (int.TryParse(s.Trim(), out int pid)) CurrentData.RentedPlants.Add(pid);
-                                }
-                            }
-                        }
-                    }
-                }
-                catch (Exception ex)
-                {
-                    Plugin.LogSource?.LogWarning($"Failed to load profile data for [{profileKey}]: {ex.Message}");
+                    string t = line.Trim();
+                    if (string.IsNullOrEmpty(t) || t.StartsWith("#")) continue;
+                    int eq = t.IndexOf('=');
+                    if (eq <= 0) continue;
+                    string k = t.Substring(0, eq).Trim(), v = t.Substring(eq + 1).Trim();
+                    if (k == "TotalWins" && int.TryParse(v, out int tw)) CurrentData.TotalWins = tw;
+                    if (k == "BonusUnlockedPlants") foreach (string s in v.Split(',', StringSplitOptions.RemoveEmptyEntries)) if (int.TryParse(s.Trim(), out int p)) CurrentData.BonusUnlockedPlants.Add(p);
                 }
             }
-            else
-            {
-                SaveCurrentData();
-            }
+            catch (Exception ex) { Plugin.LogSource?.LogWarning($"Load data error: {ex.Message}"); }
         }
 
         public static void SaveCurrentData()
         {
             try
             {
-                string profileKey = GetCurrentProfileKey();
-                string dataPath = GetDataPath(profileKey);
-
-                StringBuilder sb = new StringBuilder();
-                sb.AppendLine($"Coins={CurrentData.Coins}");
-                sb.AppendLine($"TotalRolls={CurrentData.TotalRolls}");
-                sb.AppendLine($"UnlockedGachaPlants={string.Join(",", CurrentData.UnlockedGachaPlants)}");
-                sb.AppendLine($"RentedPlants={string.Join(",", CurrentData.RentedPlants)}");
-
-                File.WriteAllText(dataPath, sb.ToString());
+                string path = GetDataPath(GetCurrentProfileKey());
+                var sb = new StringBuilder();
+                sb.AppendLine($"TotalWins={CurrentData.TotalWins}");
+                sb.AppendLine($"BonusUnlockedPlants={string.Join(",", CurrentData.BonusUnlockedPlants)}");
+                File.WriteAllText(path, sb.ToString());
             }
-            catch (Exception ex)
-            {
-                Plugin.LogSource?.LogWarning($"Failed to save profile data: {ex.Message}");
-            }
+            catch (Exception ex) { Plugin.LogSource?.LogWarning($"Save data error: {ex.Message}"); }
         }
 
-        private static void LoadOrGenerateMapping(string profileKey)
+        private static void LoadOrGenerateMapping(string key)
         {
             LevelToPlantMap.Clear();
-
-            string configPath = GetConfigPath(profileKey);
-            bool includeColored = Plugin.IncludeColoredCards != null ? Plugin.IncludeColoredCards.Value : true;
-
-            int savedSeed = 0;
+            string configPath = GetConfigPath(key);
+            int seed = 0;
 
             if (File.Exists(configPath))
             {
                 try
                 {
-                    string[] lines = File.ReadAllLines(configPath);
-                    bool isVersionValid = false;
-
-                    foreach (string line in lines)
+                    bool valid = false;
+                    foreach (string line in File.ReadAllLines(configPath))
                     {
-                        string trimmed = line.Trim();
-                        if (trimmed.StartsWith("# Version:"))
+                        string t = line.Trim();
+                        if (t.StartsWith("# Version:") && t.Contains(CONFIG_VERSION)) valid = true;
+                        if (t.StartsWith("# Seed:")) int.TryParse(t.Substring("# Seed:".Length).Trim(), out seed);
+                        if (string.IsNullOrEmpty(t) || t.StartsWith("#")) continue;
+                        int eq = t.IndexOf('=');
+                        if (eq > 0 && int.TryParse(t.Substring(0, eq), out int lv) && int.TryParse(t.Substring(eq + 1), out int pv))
                         {
-                            if (trimmed.Contains(CONFIG_VERSION))
-                            {
-                                isVersionValid = true;
-                            }
-                            continue;
-                        }
-
-                        if (trimmed.StartsWith("# Seed:"))
-                        {
-                            string seedStr = trimmed.Substring("# Seed:".Length).Trim();
-                            int.TryParse(seedStr, out savedSeed);
-                            continue;
-                        }
-
-                        if (string.IsNullOrEmpty(trimmed) || trimmed.StartsWith("#")) continue;
-
-                        int idx = trimmed.IndexOf('=');
-                        if (idx > 0 &&
-                            int.TryParse(trimmed.Substring(0, idx), out int levelVal) &&
-                            int.TryParse(trimmed.Substring(idx + 1), out int plantVal))
-                        {
-                            AdvantureLevel lvl = (AdvantureLevel)levelVal;
-                            if (!ExcludedSpecialLevels.Contains(lvl) && (int)lvl >= 1 && (int)lvl <= 100)
-                            {
-                                LevelToPlantMap[lvl] = (PlantType)plantVal;
-                            }
+                            var lvl = (AdvantureLevel)lv;
+                            if (!ExcludedSpecialLevels.Contains(lvl) && lv >= 1 && lv <= 100)
+                                LevelToPlantMap[lvl] = (PlantType)pv;
                         }
                     }
-
-                    if (isVersionValid && LevelToPlantMap.Count >= 30)
+                    if (valid && LevelToPlantMap.Count >= 30)
                     {
-                        Plugin.LogSource?.LogInfo($"Loaded {LevelToPlantMap.Count} plant reward mappings for profile [{profileKey}] from {configPath}");
+                        Plugin.LogSource?.LogInfo($"Loaded {LevelToPlantMap.Count} mappings for [{key}]");
                         return;
                     }
-
-                    Plugin.LogSource?.LogInfo($"Config file for profile [{profileKey}] is outdated or invalid. Regenerating v{CONFIG_VERSION} mapping...");
                     LevelToPlantMap.Clear();
                 }
-                catch (Exception ex)
-                {
-                    Plugin.LogSource?.LogWarning($"Error reading config mapping for profile [{profileKey}]: {ex.Message}");
-                }
+                catch { }
             }
 
-            int seed = savedSeed != 0 ? savedSeed : GenerateUniqueRandomSeed();
-            System.Random rand = new System.Random(seed);
+            if (seed == 0) seed = Guid.NewGuid().GetHashCode() ^ Environment.TickCount ^ (int)DateTime.UtcNow.Ticks;
+            var rand = new System.Random(seed);
 
-            Array levelValues = Enum.GetValues(typeof(AdvantureLevel));
-            System.Collections.Generic.List<AdvantureLevel> allLevels = new System.Collections.Generic.List<AdvantureLevel>();
-            foreach (var lvlObj in levelValues)
+            var levels = new List<AdvantureLevel>();
+            foreach (var obj in Enum.GetValues(typeof(AdvantureLevel)))
             {
-                AdvantureLevel lvl = (AdvantureLevel)lvlObj;
-                int lvlNum = (int)lvl;
-
-                if (lvlNum >= 1 && lvlNum <= 100 && !ExcludedSpecialLevels.Contains(lvl))
-                {
-                    allLevels.Add(lvl);
-                }
+                var lvl = (AdvantureLevel)obj;
+                int n = (int)lvl;
+                if (n >= 1 && n <= 100 && !ExcludedSpecialLevels.Contains(lvl)) levels.Add(lvl);
             }
 
-            PlantType[] basicPlants = CreateBasicPlantPool();
-            PlantType[] coloredPlants = CreateColoredPlantPool();
+            var basic = new List<PlantType>(CreateBasicPlantPool());
+            var super = new List<PlantType>(GetSuperPlantList());
+            Shuffle(basic, rand); Shuffle(super, rand);
+            int bi = 0, si = 0;
+            bool includeColored = Plugin.IncludeColoredCards?.Value ?? true;
 
-            System.Collections.Generic.List<PlantType> basicPool = new System.Collections.Generic.List<PlantType>(basicPlants);
-            ShuffleList(basicPool, rand);
-
-            System.Collections.Generic.List<PlantType> coloredPool = new System.Collections.Generic.List<PlantType>(coloredPlants);
-            ShuffleList(coloredPool, rand);
-
-            int basicIdx = 0;
-            int coloredIdx = 0;
-
-            foreach (AdvantureLevel lvl in allLevels)
+            foreach (var lvl in levels)
             {
-                PlantType chosenPlant;
-
-                if (basicIdx < basicPool.Count)
-                {
-                    chosenPlant = basicPool[basicIdx++];
-                }
-                else if (includeColored && coloredIdx < coloredPool.Count)
-                {
-                    chosenPlant = coloredPool[coloredIdx++];
-                }
-                else
-                {
-                    if (basicIdx >= basicPool.Count)
-                    {
-                        ShuffleList(basicPool, rand);
-                        basicIdx = 0;
-                    }
-                    chosenPlant = basicPool[basicIdx++];
-                }
-
-                LevelToPlantMap[lvl] = chosenPlant;
+                PlantType chosen;
+                if (bi < basic.Count) chosen = basic[bi++];
+                else if (includeColored && si < super.Count) chosen = super[si++];
+                else { if (bi >= basic.Count) { Shuffle(basic, rand); bi = 0; } chosen = basic[bi++]; }
+                LevelToPlantMap[lvl] = chosen;
             }
 
-            SaveMapping(configPath, seed);
-            Plugin.LogSource?.LogInfo($"Generated new v{CONFIG_VERSION} random plant reward mapping (seed: {seed}, basic: {basicPool.Count}, base game special/colored: {coloredPool.Count}) for profile [{profileKey}] ({LevelToPlantMap.Count} levels).");
-        }
-
-        private static void ShuffleList<T>(System.Collections.Generic.List<T> list, System.Random rand)
-        {
-            int n = list.Count;
-            while (n > 1)
-            {
-                n--;
-                int k = rand.Next(n + 1);
-                T value = list[k];
-                list[k] = list[n];
-                list[n] = value;
-            }
-        }
-
-        private static void SaveMapping(string configPath, int seed)
-        {
             try
             {
-                StringBuilder sb = new StringBuilder();
+                var sb = new StringBuilder();
                 sb.AppendLine($"# Version: {CONFIG_VERSION}");
                 sb.AppendLine($"# Seed: {seed}");
-                sb.AppendLine("# PlantsRandomizer per-account level->plant mapping (Base Game Cards Only)");
-                sb.AppendLine("# Function & Fixed terrain levels excluded from random plant rewards.");
-                foreach (var kvp in LevelToPlantMap)
-                {
-                    sb.AppendLine($"{(int)kvp.Key}={(int)kvp.Value}");
-                }
+                foreach (var kvp in LevelToPlantMap) sb.AppendLine($"{(int)kvp.Key}={(int)kvp.Value}");
                 File.WriteAllText(configPath, sb.ToString());
             }
-            catch (Exception ex)
-            {
-                Plugin.LogSource?.LogWarning($"Failed to save mapping file: {ex.Message}");
-            }
+            catch { }
+
+            Plugin.LogSource?.LogInfo($"Generated v{CONFIG_VERSION} mapping for [{key}] ({LevelToPlantMap.Count} levels, seed {seed})");
+        }
+
+        private static void Shuffle<T>(List<T> list, System.Random rand)
+        {
+            int n = list.Count;
+            while (n > 1) { n--; int k = rand.Next(n + 1); var v = list[k]; list[k] = list[n]; list[n] = v; }
         }
 
         public static bool IsLevelCompleted(AdvantureLevel lvl)
@@ -745,64 +369,38 @@ namespace PlantsRandomizer
             try
             {
                 if (GameAPP.developerMode) return true;
-
-                int lvlNum = (int)lvl;
-                if (lvlNum <= 0) return false;
-
-                var advCompleted = GameAPP.advLevelCompleted;
-                if (advCompleted != null && lvlNum >= 0 && lvlNum < advCompleted.Length)
+                int n = (int)lvl;
+                if (n <= 0) return false;
+                var arr = GameAPP.advLevelCompleted;
+                if (arr != null && n < arr.Length && arr[n]) return true;
+                if (GameAPP.advantureLevel > n) return true;
+                var d = AdvantureConfig.data;
+                if (d != null)
                 {
-                    if (advCompleted[lvlNum]) return true;
-                }
-
-                int currentAdvLevel = GameAPP.advantureLevel;
-                if (currentAdvLevel > lvlNum) return true;
-
-                var data = AdvantureConfig.data;
-                if (data != null)
-                {
-                    if (data.levelCompleted != null && data.levelCompleted.Contains(lvl)) return true;
-                    if (data.levelCompletedHard != null && data.levelCompletedHard.Contains(lvl)) return true;
+                    if (d.levelCompleted != null && d.levelCompleted.Contains(lvl)) return true;
+                    if (d.levelCompletedHard != null && d.levelCompletedHard.Contains(lvl)) return true;
                 }
             }
             catch { }
-
             return false;
         }
 
-        public static bool IsPlantUnlockedInternal(PlantType plantType)
+        public static bool IsPlantUnlocked(PlantType pt)
         {
             if (GameAPP.developerMode) return true;
+            int id = (int)pt;
+            if (CurrentData.BonusUnlockedPlants.Contains(id)) return true;
 
-            int ptId = (int)plantType;
-
-            if (CurrentData != null)
-            {
-                if (CurrentData.UnlockedGachaPlants.Contains(ptId)) return true;
-                if (CurrentData.RentedPlants.Contains(ptId)) return true;
-            }
-
-            if (plantType == PlantType.Peashooter || plantType == PlantType.SunFlower)
-            {
-                return true;
-            }
-
-            if (plantType == PlantType.LilyPad)
-            {
-                return IsLevelCompleted(AdvantureLevel.Pool1);
-            }
-
-            if (plantType == PlantType.Pot)
-            {
-                return IsLevelCompleted(AdvantureLevel.Roof1);
-            }
+            if (pt == PlantType.Peashooter || pt == PlantType.SunFlower) return true;
+            if (pt == PlantType.LilyPad) return IsLevelCompleted(AdvantureLevel.Pool1);
+            if (pt == PlantType.Pot) return IsLevelCompleted(AdvantureLevel.Roof1);
 
             bool isMapped = false;
             bool anyCompleted = false;
 
             foreach (var kvp in LevelToPlantMap)
             {
-                if (kvp.Value == plantType)
+                if (kvp.Value == pt)
                 {
                     isMapped = true;
                     if (IsLevelCompleted(kvp.Key))
@@ -813,194 +411,115 @@ namespace PlantsRandomizer
                 }
             }
 
-            if (isMapped)
-            {
-                return anyCompleted;
-            }
-
+            if (isMapped) return anyCompleted;
             return false;
         }
 
         // --- Profile Change Hooks ---
+        [HarmonyPostfix, HarmonyPatch(typeof(SaveInfo), nameof(SaveInfo.SaveLastSelectedSave))]
+        public static void SaveLastSelectedSave_Postfix() { lock (Sync) { _initialized = false; _activeProfile = string.Empty; } }
 
-        [HarmonyPostfix]
-        [HarmonyPatch(typeof(SaveInfo), nameof(SaveInfo.SaveLastSelectedSave))]
-        public static void SaveLastSelectedSave_Postfix()
-        {
-            lock (Sync)
-            {
-                _initialized = false;
-                _activeProfile = string.Empty;
-            }
-        }
-
-        [HarmonyPostfix]
-        [HarmonyPatch(typeof(SaveInfo), nameof(SaveInfo.LoadPlayerData))]
-        public static void LoadPlayerData_Postfix()
-        {
-            lock (Sync)
-            {
-                _initialized = false;
-                _activeProfile = string.Empty;
-            }
-        }
+        [HarmonyPostfix, HarmonyPatch(typeof(SaveInfo), nameof(SaveInfo.LoadPlayerData))]
+        public static void LoadPlayerData_Postfix() { lock (Sync) { _initialized = false; _activeProfile = string.Empty; } }
 
         // --- Harmony Patches ---
-
-        [HarmonyPrefix]
-        [HarmonyPatch(typeof(InitBoard), nameof(InitBoard.CreateCard), new Type[] { typeof(PlantType), typeof(bool), typeof(bool) })]
+        [HarmonyPrefix, HarmonyPatch(typeof(InitBoard), nameof(InitBoard.CreateCard), new Type[] { typeof(PlantType), typeof(bool), typeof(bool) })]
         public static void CreateCard_Prefix(ref PlantType theSeedType)
         {
             EnsureInitialized();
-
-            if (AdvantureConfig.unlockLevels != null && AdvantureConfig.unlockLevels.TryGetValue(theSeedType, out AdvantureLevel originalLevel))
-            {
-                if (LevelToPlantMap.TryGetValue(originalLevel, out PlantType randomPlant))
-                {
-                    Plugin.LogSource?.LogInfo($"[InitBoard.CreateCard] Replacing original level reward {theSeedType} (Level {originalLevel}) -> {randomPlant}");
-                    theSeedType = randomPlant;
-                }
-            }
+            if (AdvantureConfig.unlockLevels != null && AdvantureConfig.unlockLevels.TryGetValue(theSeedType, out AdvantureLevel orig) && LevelToPlantMap.TryGetValue(orig, out PlantType rnd))
+                theSeedType = rnd;
         }
 
-        [HarmonyPrefix]
-        [HarmonyPatch(typeof(InGameUI), nameof(InGameUI.UnlockCard))]
+        [HarmonyPrefix, HarmonyPatch(typeof(InGameUI), nameof(InGameUI.UnlockCard))]
         public static void UnlockCard_Prefix(ref PlantType theSeedType)
         {
             EnsureInitialized();
-
-            AdvantureLevel lvl = AdvantureLevel.Day1;
-            if (AdvantureManager.Instance != null)
-            {
-                lvl = AdvantureManager.Instance.level;
-            }
-            else
-            {
-                lvl = (AdvantureLevel)GameAPP.theBoardLevel;
-            }
-
-            if (LevelToPlantMap.TryGetValue(lvl, out PlantType targetPlant))
-            {
-                Plugin.LogSource?.LogInfo($"[UnlockCard_Prefix] Overriding unlock for level {lvl}: {theSeedType} -> {targetPlant}");
-                theSeedType = targetPlant;
-            }
+            AdvantureLevel lvl;
+            try { lvl = AdvantureManager.Instance != null ? AdvantureManager.Instance.level : (AdvantureLevel)GameAPP.theBoardLevel; }
+            catch { lvl = AdvantureLevel.Day1; }
+            if (LevelToPlantMap.TryGetValue(lvl, out PlantType rnd)) theSeedType = rnd;
         }
 
-        [HarmonyPrefix]
-        [HarmonyPatch(typeof(AdvantureConfig), nameof(AdvantureConfig.GetBasicPlantType))]
+        [HarmonyPrefix, HarmonyPatch(typeof(AdvantureConfig), nameof(AdvantureConfig.GetBasicPlantType))]
         public static bool GetBasicPlantType_Prefix(AdvantureLevel level, ref PlantType __result)
         {
             EnsureInitialized();
-
-            if (LevelToPlantMap.TryGetValue(level, out PlantType randomPlant))
-            {
-                __result = randomPlant;
-                Plugin.LogSource?.LogInfo($"[AdvantureConfig.GetBasicPlantType] Level {level} -> Randomized Reward: {randomPlant}");
-                return false;
-            }
-
+            if (LevelToPlantMap.TryGetValue(level, out PlantType rnd)) { __result = rnd; return false; }
             return true;
         }
 
-        [HarmonyPrefix]
-        [HarmonyPatch(typeof(AdvantureConfig), nameof(AdvantureConfig.CheckPlantUnlock))]
+        [HarmonyPrefix, HarmonyPatch(typeof(AdvantureConfig), nameof(AdvantureConfig.CheckPlantUnlock))]
         public static bool CheckPlantUnlock_Prefix(PlantType plantType, ref bool __result)
         {
             EnsureInitialized();
-
-            __result = IsPlantUnlockedInternal(plantType);
+            __result = IsPlantUnlocked(plantType);
             return false;
         }
 
-        [HarmonyPrefix]
-        [HarmonyPatch(typeof(Lawnf), nameof(Lawnf.CheckIfPlantUnlock))]
+        [HarmonyPrefix, HarmonyPatch(typeof(Lawnf), nameof(Lawnf.CheckIfPlantUnlock))]
         public static bool CheckIfPlantUnlock_Prefix(PlantType thePlantType, ref UnlockType __result)
         {
             EnsureInitialized();
-
-            bool unlocked = IsPlantUnlockedInternal(thePlantType);
+            bool unlocked = IsPlantUnlocked(thePlantType);
             __result = unlocked ? UnlockType.Unlocked : UnlockType.NotUnlocked;
             return false;
         }
 
-        [HarmonyPostfix]
-        [HarmonyPatch(typeof(Lawnf), nameof(Lawnf.SetAward))]
+        // --- Milestone Victory Trigger: Every 5 Wins -> Award Bonus Random Plant ---
+        [HarmonyPostfix, HarmonyPatch(typeof(Lawnf), nameof(Lawnf.SetAward))]
         public static void SetAward_Postfix(Board board, Vector2 position, bool killZombie, bool fake, PrizeMgr __result)
         {
             EnsureInitialized();
-
             if (board == null || __result == null) return;
-
             try
             {
-                CurrentData.Coins += 100;
-                CurrentData.RentedPlants.Clear();
+                CurrentData.TotalWins++;
                 SaveCurrentData();
 
-                if (Plugin.ShopInstance != null)
+                Plugin.LogSource?.LogInfo($"[Victory] Total wins: {CurrentData.TotalWins}");
+
+                if (CurrentData.TotalWins % 5 == 0)
                 {
-                    Plugin.ShopInstance.ShowNotification("🎉 Thắng màn chơi! Nhận +100 Fusion Coins 🪙");
+                    PlantType bonusPlant = DoBonusReward();
+                    string notif = $"🎉 THẮNG MỐC {CurrentData.TotalWins} TRẬN! Thưởng BONUS Cây: [{bonusPlant}]!";
+                    Plugin.LogSource?.LogInfo(notif);
+                    BonusUIManager.ShowNotif(notif, 7f);
                 }
 
-                AdvantureLevel lvl = AdvantureLevel.Day1;
-                if (AdvantureManager.Instance != null)
-                {
-                    lvl = AdvantureManager.Instance.level;
-                }
-                else
-                {
-                    lvl = (AdvantureLevel)GameAPP.theBoardLevel;
-                }
+                AdvantureLevel lvl;
+                try { lvl = AdvantureManager.Instance != null ? AdvantureManager.Instance.level : (AdvantureLevel)GameAPP.theBoardLevel; }
+                catch { lvl = AdvantureLevel.Day1; }
 
-                if (LevelToPlantMap.TryGetValue(lvl, out PlantType targetPlant))
+                if (LevelToPlantMap.TryGetValue(lvl, out PlantType rnd))
                 {
-                    CardUI cardUI = __result.GetComponent<CardUI>();
-                    if (cardUI == null)
+                    CardUI cu = __result.GetComponent<CardUI>() ?? __result.GetComponentInChildren<CardUI>();
+                    if (cu != null)
                     {
-                        cardUI = __result.GetComponentInChildren<CardUI>();
-                    }
-
-                    if (cardUI != null)
-                    {
-                        Plugin.LogSource?.LogInfo($"[SetAward] Swapping trophy card for level {lvl} to {targetPlant}");
-                        cardUI.thePlantType = targetPlant;
-                        cardUI.theSeedType = (int)targetPlant;
-                        try { cardUI.ChangeCardSprite(); } catch { }
+                        cu.thePlantType = rnd; cu.theSeedType = (int)rnd;
+                        try { cu.ChangeCardSprite(); } catch { }
                     }
                 }
             }
-            catch (Exception ex)
-            {
-                Plugin.LogSource?.LogWarning($"Error in SetAward_Postfix: {ex.Message}");
-            }
+            catch (Exception ex) { Plugin.LogSource?.LogWarning($"SetAward error: {ex.Message}"); }
         }
 
-        [HarmonyPostfix]
-        [HarmonyPatch(typeof(AdvantureConfig), nameof(AdvantureConfig.LoadData))]
+        [HarmonyPostfix, HarmonyPatch(typeof(AdvantureConfig), nameof(AdvantureConfig.LoadData))]
         public static void LoadData_Postfix()
         {
             EnsureInitialized();
-
             try
             {
-                var unlockDict = AdvantureConfig.unlockLevels;
-                if (unlockDict != null)
+                var dict = AdvantureConfig.unlockLevels;
+                if (dict != null)
                 {
-                    unlockDict.Clear();
-
-                    unlockDict[PlantType.Peashooter] = AdvantureLevel.Day1;
-                    unlockDict[PlantType.SunFlower] = AdvantureLevel.Day1;
-
-                    foreach (var kvp in LevelToPlantMap)
-                    {
-                        unlockDict[kvp.Value] = kvp.Key;
-                    }
+                    dict.Clear();
+                    dict[PlantType.Peashooter] = AdvantureLevel.Day1;
+                    dict[PlantType.SunFlower] = AdvantureLevel.Day1;
+                    foreach (var kvp in LevelToPlantMap) dict[kvp.Value] = kvp.Key;
                 }
             }
-            catch (Exception ex)
-            {
-                Plugin.LogSource?.LogWarning($"Non-fatal error updating unlockLevels: {ex.Message}");
-            }
+            catch (Exception ex) { Plugin.LogSource?.LogWarning($"LoadData_Postfix error: {ex.Message}"); }
         }
     }
 }

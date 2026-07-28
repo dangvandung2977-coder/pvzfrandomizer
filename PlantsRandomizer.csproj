@@ -51,4 +51,10 @@
     </Reference>
   </ItemGroup>
 
+  <!-- Embed All UI Assets (PNG & RGBA) Directly into the DLL -->
+  <ItemGroup>
+    <EmbeddedResource Include="..\BepInEx\plugins\PlantsRandomizer_Assets\*.png" Link="Assets\%(Filename)%(Extension)" />
+    <EmbeddedResource Include="..\BepInEx\plugins\PlantsRandomizer_Assets\*.rgba" Link="Assets\%(Filename)%(Extension)" />
+  </ItemGroup>
+
 </Project>

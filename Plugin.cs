@@ -7,22 +7,24 @@ using BepInEx.Logging;
 using BepInEx.Unity.IL2CPP;
 using HarmonyLib;
 using UnityEngine;
-using Il2CppSystem.Collections.Generic;
+using Il2CppInterop.Runtime.Injection;
+using Il2CppInterop.Runtime.InteropTypes.Arrays;
 
 namespace PlantsRandomizer
 {
-    [BepInPlugin("com.duong.pvzfusion.plantsrandomizer", "Plants Randomizer", "1.4.0")]
+    [BepInPlugin("com.duong.pvzfusion.plantsrandomizer", "Plants Randomizer", "2.0.0")]
     public class Plugin : BasePlugin
     {
         public static ManualLogSource LogSource = null!;
         public static BepInEx.Configuration.ConfigEntry<bool> IncludeColoredCards = null!;
+        public static ShopUIManager ShopInstance = null!;
 
         public override void Load()
         {
             LogSource = Log;
             IncludeColoredCards = Config.Bind("General", "IncludeColoredCards", true, "Include base game special/colored card plants in post-adventure reward pool.");
 
-            Log.LogInfo("Plants Randomizer Mod v1.4.0 initializing...");
+            Log.LogInfo("Plants Randomizer Mod v2.0.0 (Shop, Coins, Rental & Gacha) initializing...");
 
             try
             {
@@ -34,20 +36,294 @@ namespace PlantsRandomizer
             {
                 Log.LogError($"Failed to register Harmony patches: {ex}");
             }
+
+            try
+            {
+                ClassInjector.RegisterTypeInIl2Cpp<ShopUIManager>();
+                GameObject shopObj = new GameObject("PlantsRandomizerShopUI");
+                UnityEngine.Object.DontDestroyOnLoad(shopObj);
+                ShopInstance = shopObj.AddComponent<ShopUIManager>();
+                Log.LogInfo("ShopUIManager UI Component registered and created successfully!");
+            }
+            catch (Exception ex)
+            {
+                Log.LogWarning($"Could not register ShopUIManager component: {ex.Message}");
+            }
+        }
+    }
+
+    public class ProfileData
+    {
+        public int Coins = 200;
+        public int TotalRolls = 0;
+        public System.Collections.Generic.HashSet<int> UnlockedGachaPlants = new System.Collections.Generic.HashSet<int>();
+        public System.Collections.Generic.HashSet<int> RentedPlants = new System.Collections.Generic.HashSet<int>();
+    }
+
+    public class ShopUIManager : MonoBehaviour
+    {
+        private bool _showWindow = false;
+        private Rect _windowRect = new Rect(Screen.width / 2 - 330, Screen.height / 2 - 275, 660, 550);
+        private int _selectedTab = 0; // 0 = Gacha, 1 = Rental Shop, 2 = Inventory
+        private string _lastNotification = string.Empty;
+        private float _notifTimer = 0f;
+        private Vector2 _scrollPos = Vector2.zero;
+
+        private Texture2D _bannerTex = null!;
+        private Texture2D _coinTex = null!;
+
+        public ShopUIManager(IntPtr ptr) : base(ptr) { }
+
+        private void Start()
+        {
+            LoadGUITextures();
+        }
+
+        private void LoadGUITextures()
+        {
+            try
+            {
+                string assetsDir = Path.Combine(Paths.PluginPath, "PlantsRandomizer_Assets");
+                string bannerPath = Path.Combine(assetsDir, "gacha_banner_bg.png");
+                string coinPath = Path.Combine(assetsDir, "fusion_coin_icon.png");
+
+                if (File.Exists(bannerPath))
+                {
+                    byte[] bData = File.ReadAllBytes(bannerPath);
+                    Il2CppStructArray<byte> ilBannerData = bData;
+                    _bannerTex = new Texture2D(2, 2, TextureFormat.RGBA32, false);
+                    ImageConversion.LoadImage(_bannerTex, ilBannerData);
+                }
+
+                if (File.Exists(coinPath))
+                {
+                    byte[] cData = File.ReadAllBytes(coinPath);
+                    Il2CppStructArray<byte> ilCoinData = cData;
+                    _coinTex = new Texture2D(2, 2, TextureFormat.RGBA32, false);
+                    ImageConversion.LoadImage(_coinTex, ilCoinData);
+                }
+            }
+            catch (Exception ex)
+            {
+                Plugin.LogSource?.LogWarning($"Error loading GUI textures: {ex.Message}");
+            }
+        }
+
+        private void Update()
+        {
+            if (Input.GetKeyDown(KeyCode.F3))
+            {
+                _showWindow = !_showWindow;
+            }
+
+            if (_notifTimer > 0)
+            {
+                _notifTimer -= Time.deltaTime;
+                if (_notifTimer <= 0)
+                {
+                    _lastNotification = string.Empty;
+                }
+            }
+        }
+
+        public void ShowNotification(string msg, float duration = 4.0f)
+        {
+            _lastNotification = msg;
+            _notifTimer = duration;
+        }
+
+        private void OnGUI()
+        {
+            AwardPatches.EnsureInitialized();
+            var data = AwardPatches.CurrentData;
+
+            // Draw Coin HUD
+            GUI.Box(new Rect(10, 10, 230, 45), string.Empty);
+            if (_coinTex != null)
+            {
+                GUI.DrawTexture(new Rect(15, 12, 40, 40), _coinTex);
+            }
+            GUI.Label(new Rect(60, 20, 175, 30), $"<b><color=yellow>Fusion Coins: {data.Coins}</color></b>");
+
+            if (GUI.Button(new Rect(250, 12, 130, 40), _showWindow ? "Đóng Shop [F3]" : "🛒 Gacha Shop [F3]"))
+            {
+                _showWindow = !_showWindow;
+            }
+
+            if (!string.IsNullOrEmpty(_lastNotification))
+            {
+                GUI.Box(new Rect(Screen.width / 2 - 220, 20, 440, 45), string.Empty);
+                GUI.Label(new Rect(Screen.width / 2 - 210, 30, 420, 30), $"<b><color=lime>✨ {_lastNotification}</color></b>");
+            }
+
+            if (!_showWindow) return;
+
+            _windowRect = GUI.Window(9928, _windowRect, (GUI.WindowFunction)DrawShopWindow, "🛒 Plants Randomizer - Gacha & Shop Center");
+        }
+
+        private void DrawShopWindow(int windowID)
+        {
+            GUI.DragWindow(new Rect(0, 0, 660, 25));
+
+            var data = AwardPatches.CurrentData;
+
+            GUILayout.BeginHorizontal();
+            if (GUILayout.Button("🎰 Quay Gacha Banner", GUILayout.Height(35))) _selectedTab = 0;
+            if (GUILayout.Button("⏳ Thuê Cây Theo Trận", GUILayout.Height(35))) _selectedTab = 1;
+            if (GUILayout.Button("📦 Cây Đã Mở Khóa", GUILayout.Height(35))) _selectedTab = 2;
+            GUILayout.EndHorizontal();
+
+            GUILayout.Space(10);
+            GUILayout.Label($"<b>Số dư: <color=yellow>🪙 {data.Coins} Coins</color></b>  |  <b>Tổng lượt quay: <color=cyan>{data.TotalRolls}</color></b>");
+            GUILayout.Space(10);
+
+            if (_selectedTab == 0)
+            {
+                DrawGachaTab(data);
+            }
+            else if (_selectedTab == 1)
+            {
+                DrawRentalTab(data);
+            }
+            else if (_selectedTab == 2)
+            {
+                DrawInventoryTab(data);
+            }
+
+            GUILayout.FlexibleSpace();
+            if (GUILayout.Button("Đóng Cửa Hàng [F3]", GUILayout.Height(32)))
+            {
+                _showWindow = false;
+            }
+        }
+
+        private void DrawGachaTab(ProfileData data)
+        {
+            if (_bannerTex != null)
+            {
+                Rect bannerRect = GUILayoutUtility.GetRect(640, 160);
+                GUI.DrawTexture(bannerRect, _bannerTex);
+            }
+            else
+            {
+                GUILayout.Box("🎰 Gacha Banner - Mở Khóa Cây Vĩnh Viễn\n🟢 Common (60%) | 🔵 Rare (30%) | 🟡 Legendary/Ultimate (10%)");
+            }
+
+            GUILayout.Space(15);
+
+            GUILayout.BeginHorizontal();
+            if (GUILayout.Button("🎲 Quay 1 Lần (100 Coins)", GUILayout.Height(50)))
+            {
+                if (data.Coins >= 100)
+                {
+                    data.Coins -= 100;
+                    data.TotalRolls++;
+                    PlantType rolled = AwardPatches.DoGachaRoll(data);
+                    ShowNotification($"Quay trúng: [{rolled}]!");
+                    AwardPatches.SaveCurrentData();
+                }
+                else
+                {
+                    ShowNotification("❌ Bạn không đủ Coins! (Cần 100 Coins)");
+                }
+            }
+
+            if (GUILayout.Button("🎰 Quay 10 Lần (900 Coins)", GUILayout.Height(50)))
+            {
+                if (data.Coins >= 900)
+                {
+                    data.Coins -= 900;
+                    data.TotalRolls += 10;
+                    System.Collections.Generic.List<string> results = new System.Collections.Generic.List<string>();
+                    for (int i = 0; i < 10; i++)
+                    {
+                        PlantType rolled = AwardPatches.DoGachaRoll(data);
+                        results.Add(rolled.ToString());
+                    }
+                    ShowNotification($"10x Roll: {string.Join(", ", results)}");
+                    AwardPatches.SaveCurrentData();
+                }
+                else
+                {
+                    ShowNotification("❌ Bạn không đủ Coins! (Cần 900 Coins)");
+                }
+            }
+            GUILayout.EndHorizontal();
+        }
+
+        private void DrawRentalTab(ProfileData data)
+        {
+            GUILayout.Box("⏳ Cửa Hàng Cho Thuê Cây - Thuê Cây Dùng Cho 1 Trận Đấu (30 Coins/Cây)");
+            GUILayout.Space(10);
+
+            _scrollPos = GUILayout.BeginScrollView(_scrollPos, GUILayout.Height(280));
+            
+            PlantType[] coloredPool = AwardPatches.CreateColoredPlantPool();
+            foreach (PlantType pt in coloredPool)
+            {
+                int ptId = (int)pt;
+                bool isRented = data.RentedPlants.Contains(ptId);
+                bool isUnlocked = data.UnlockedGachaPlants.Contains(ptId) || AwardPatches.IsPlantUnlockedInternal(pt);
+
+                GUILayout.BeginHorizontal();
+                GUILayout.Label($"{pt} (ID {ptId})", GUILayout.Width(250));
+
+                if (isUnlocked)
+                {
+                    GUILayout.Label("✅ Đã mở khóa", GUILayout.Width(150));
+                }
+                else if (isRented)
+                {
+                    GUILayout.Label("⏳ Đã thuê (1 trận)", GUILayout.Width(150));
+                }
+                else
+                {
+                    if (GUILayout.Button("Thuê 30 Coins", GUILayout.Width(150)))
+                    {
+                        if (data.Coins >= 30)
+                        {
+                            data.Coins -= 30;
+                            data.RentedPlants.Add(ptId);
+                            ShowNotification($"Đã thuê [{pt}] cho trận đấu này!");
+                            AwardPatches.SaveCurrentData();
+                        }
+                        else
+                        {
+                            ShowNotification("❌ Bạn không đủ Coins!");
+                        }
+                    }
+                }
+                GUILayout.EndHorizontal();
+            }
+
+            GUILayout.EndScrollView();
+        }
+
+        private void DrawInventoryTab(ProfileData data)
+        {
+            GUILayout.Box($"📦 Danh sách cây đã mở khóa qua Gacha ({data.UnlockedGachaPlants.Count} cây)");
+            GUILayout.Space(10);
+
+            _scrollPos = GUILayout.BeginScrollView(_scrollPos, GUILayout.Height(280));
+            foreach (int ptId in data.UnlockedGachaPlants)
+            {
+                PlantType pt = (PlantType)ptId;
+                GUILayout.Label($"✨ {pt} (ID {ptId})");
+            }
+            GUILayout.EndScrollView();
         }
     }
 
     [HarmonyPatch]
     public static class AwardPatches
     {
-        private const string CONFIG_VERSION = "1.4.0";
+        private const string CONFIG_VERSION = "2.0.0";
         private static readonly object Sync = new object();
         private static bool _initialized = false;
         private static string _activeProfile = string.Empty;
         public static readonly System.Collections.Generic.Dictionary<AdvantureLevel, PlantType> LevelToPlantMap = new();
+        public static ProfileData CurrentData = new ProfileData();
 
-        // Special levels that unlock gameplay functions (e.g. Shovel at Day4) or fixed terrain (LilyPad at Pool1, Pot at Roof1).
-        // These levels MUST NOT give any extra random plant reward.
         public static readonly System.Collections.Generic.HashSet<AdvantureLevel> ExcludedSpecialLevels = new()
         {
             AdvantureLevel.Pool1,      // 3-1: Fixed LilyPad
@@ -70,10 +346,8 @@ namespace PlantsRandomizer
                 PlantType p = (PlantType)obj;
                 int id = (int)p;
 
-                // Basic plants are strictly IDs 0 to 47 in base game
                 if (id < 0 || id > 47) continue;
 
-                // Exclude default starting plants and fixed terrain plants
                 if (p == PlantType.Peashooter || p == PlantType.SunFlower || p == PlantType.LilyPad || p == PlantType.Pot)
                 {
                     continue;
@@ -101,12 +375,9 @@ namespace PlantsRandomizer
                 PlantType p = (PlantType)obj;
                 int id = (int)p;
 
-                // Base game special plants (IDs 200..299 e.g. Hamburger, Pudding, Apple)
-                // and base game fusion cards (IDs 1000..1999 e.g. SniperPea, SuperGatling, ObsidianJalapeno)
                 bool isSpecialOrColored = (id >= 200 && id <= 299) || (id >= 1000 && id < 2000);
                 if (!isSpecialOrColored) continue;
 
-                // Exclude any modded or non-standard plant enum values
                 if (!Enum.IsDefined(typeof(PlantType), p)) continue;
 
                 string name = p.ToString();
@@ -119,6 +390,28 @@ namespace PlantsRandomizer
             }
 
             return pool.ToArray();
+        }
+
+        public static PlantType DoGachaRoll(ProfileData data)
+        {
+            System.Random rand = new System.Random(Guid.NewGuid().GetHashCode() ^ Environment.TickCount);
+            int roll = rand.Next(100);
+
+            PlantType[] pool;
+            if (roll < 60)
+            {
+                pool = CreateBasicPlantPool();
+            }
+            else
+            {
+                pool = CreateColoredPlantPool();
+            }
+
+            if (pool.Length == 0) pool = CreateBasicPlantPool();
+
+            PlantType chosen = pool[rand.Next(pool.Length)];
+            data.UnlockedGachaPlants.Add((int)chosen);
+            return chosen;
         }
 
         public static string GetCurrentProfileKey()
@@ -181,6 +474,16 @@ namespace PlantsRandomizer
             return Path.Combine(Paths.ConfigPath, $"PlantsRandomizer_Mapping_{profileKey}.txt");
         }
 
+        private static string GetDataPath(string profileKey)
+        {
+            if (string.IsNullOrEmpty(profileKey)) profileKey = "default";
+            foreach (char c in Path.GetInvalidFileNameChars())
+            {
+                profileKey = profileKey.Replace(c, '_');
+            }
+            return Path.Combine(Paths.ConfigPath, $"PlantsRandomizer_Data_{profileKey}.txt");
+        }
+
         public static void EnsureInitialized()
         {
             string currentProfile = GetCurrentProfileKey();
@@ -192,8 +495,81 @@ namespace PlantsRandomizer
                 if (_initialized && _activeProfile == currentProfile) return;
 
                 LoadOrGenerateMapping(currentProfile);
+                LoadProfileData(currentProfile);
                 _activeProfile = currentProfile;
                 _initialized = true;
+            }
+        }
+
+        private static void LoadProfileData(string profileKey)
+        {
+            CurrentData = new ProfileData();
+            string dataPath = GetDataPath(profileKey);
+
+            if (File.Exists(dataPath))
+            {
+                try
+                {
+                    string[] lines = File.ReadAllLines(dataPath);
+                    foreach (string line in lines)
+                    {
+                        string trimmed = line.Trim();
+                        if (string.IsNullOrEmpty(trimmed) || trimmed.StartsWith("#")) continue;
+
+                        int idx = trimmed.IndexOf('=');
+                        if (idx > 0)
+                        {
+                            string key = trimmed.Substring(0, idx).Trim();
+                            string val = trimmed.Substring(idx + 1).Trim();
+
+                            if (key == "Coins" && int.TryParse(val, out int c)) CurrentData.Coins = c;
+                            if (key == "TotalRolls" && int.TryParse(val, out int tr)) CurrentData.TotalRolls = tr;
+                            if (key == "UnlockedGachaPlants")
+                            {
+                                foreach (string s in val.Split(new char[] { ',' }, StringSplitOptions.RemoveEmptyEntries))
+                                {
+                                    if (int.TryParse(s.Trim(), out int pid)) CurrentData.UnlockedGachaPlants.Add(pid);
+                                }
+                            }
+                            if (key == "RentedPlants")
+                            {
+                                foreach (string s in val.Split(new char[] { ',' }, StringSplitOptions.RemoveEmptyEntries))
+                                {
+                                    if (int.TryParse(s.Trim(), out int pid)) CurrentData.RentedPlants.Add(pid);
+                                }
+                            }
+                        }
+                    }
+                }
+                catch (Exception ex)
+                {
+                    Plugin.LogSource?.LogWarning($"Failed to load profile data for [{profileKey}]: {ex.Message}");
+                }
+            }
+            else
+            {
+                SaveCurrentData();
+            }
+        }
+
+        public static void SaveCurrentData()
+        {
+            try
+            {
+                string profileKey = GetCurrentProfileKey();
+                string dataPath = GetDataPath(profileKey);
+
+                StringBuilder sb = new StringBuilder();
+                sb.AppendLine($"Coins={CurrentData.Coins}");
+                sb.AppendLine($"TotalRolls={CurrentData.TotalRolls}");
+                sb.AppendLine($"UnlockedGachaPlants={string.Join(",", CurrentData.UnlockedGachaPlants)}");
+                sb.AppendLine($"RentedPlants={string.Join(",", CurrentData.RentedPlants)}");
+
+                File.WriteAllText(dataPath, sb.ToString());
+            }
+            catch (Exception ex)
+            {
+                Plugin.LogSource?.LogWarning($"Failed to save profile data: {ex.Message}");
             }
         }
 
@@ -262,7 +638,6 @@ namespace PlantsRandomizer
                 }
             }
 
-            // Generate a fresh unique random seed per save profile instance
             int seed = savedSeed != 0 ? savedSeed : GenerateUniqueRandomSeed();
             System.Random rand = new System.Random(seed);
 
@@ -273,8 +648,6 @@ namespace PlantsRandomizer
                 AdvantureLevel lvl = (AdvantureLevel)lvlObj;
                 int lvlNum = (int)lvl;
 
-                // STRICT FILTER: Only include valid playable Adventure levels (lvlNum >= 1 && lvlNum <= 100).
-                // Exclude Default (0) and challenge/endless level enum entries.
                 if (lvlNum >= 1 && lvlNum <= 100 && !ExcludedSpecialLevels.Contains(lvl))
                 {
                     allLevels.Add(lvl);
@@ -297,7 +670,6 @@ namespace PlantsRandomizer
             {
                 PlantType chosenPlant;
 
-                // Priority: Map all basic plants to adventure levels first
                 if (basicIdx < basicPool.Count)
                 {
                     chosenPlant = basicPool[basicIdx++];
@@ -387,29 +759,33 @@ namespace PlantsRandomizer
             return false;
         }
 
-        private static bool IsPlantUnlockedInternal(PlantType plantType)
+        public static bool IsPlantUnlockedInternal(PlantType plantType)
         {
             if (GameAPP.developerMode) return true;
 
-            // At start of Level 1-1, player ONLY has Peashooter (0) and Sunflower (1)
+            int ptId = (int)plantType;
+
+            if (CurrentData != null)
+            {
+                if (CurrentData.UnlockedGachaPlants.Contains(ptId)) return true;
+                if (CurrentData.RentedPlants.Contains(ptId)) return true;
+            }
+
             if (plantType == PlantType.Peashooter || plantType == PlantType.SunFlower)
             {
                 return true;
             }
 
-            // LilyPad: Unlocked ONLY when Pool1 (3-1) is completed
             if (plantType == PlantType.LilyPad)
             {
                 return IsLevelCompleted(AdvantureLevel.Pool1);
             }
 
-            // Pot: Unlocked ONLY when Roof1 (5-1) is completed
             if (plantType == PlantType.Pot)
             {
                 return IsLevelCompleted(AdvantureLevel.Roof1);
             }
 
-            // Standard plants: Unlocked ONLY if their mapped level in LevelToPlantMap is COMPLETED
             bool isMapped = false;
             bool anyCompleted = false;
 
@@ -546,6 +922,15 @@ namespace PlantsRandomizer
 
             try
             {
+                CurrentData.Coins += 100;
+                CurrentData.RentedPlants.Clear();
+                SaveCurrentData();
+
+                if (Plugin.ShopInstance != null)
+                {
+                    Plugin.ShopInstance.ShowNotification("🎉 Thắng màn chơi! Nhận +100 Fusion Coins 🪙");
+                }
+
                 AdvantureLevel lvl = AdvantureLevel.Day1;
                 if (AdvantureManager.Instance != null)
                 {

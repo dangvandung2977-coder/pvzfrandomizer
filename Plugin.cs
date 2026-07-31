@@ -64,11 +64,11 @@ namespace PlantsRandomizer
 
             try
             {
-                if (Input.GetKeyDown(KeyCode.F8))
+                if (Input.GetKeyDown(KeyCode.F11))
                 {
                     AwardPatches.RerollCurrentProfileSeed();
                 }
-                if (Input.GetKeyDown(KeyCode.F9))
+                if (Input.GetKeyDown(KeyCode.F12))
                 {
                     AwardPatches.RerollLastLevelPlant();
                 }
@@ -194,11 +194,11 @@ namespace PlantsRandomizer
             return pool.ToArray();
         }
 
+        // ONLY levels that give fixed terrain plants stay non-random: Pool1 (3-1) -> LilyPad, Roof1 (5-1) -> Pot.
+        // All other levels are randomized.
         public static readonly HashSet<AdvantureLevel> ExcludedSpecialLevels = new()
         {
-            AdvantureLevel.Pool1, AdvantureLevel.Roof1, AdvantureLevel.Day4,
-            AdvantureLevel.Day_sub1, AdvantureLevel.Night5, AdvantureLevel.Pool5,
-            AdvantureLevel.Roof5, AdvantureLevel.Roof6
+            AdvantureLevel.Pool1, AdvantureLevel.Roof1
         };
 
         public static string GetCurrentProfileKey()
@@ -429,7 +429,7 @@ namespace PlantsRandomizer
 
                 SaveMapping(GetCurrentProfileKey());
 
-                string notif = $"\ud83c\udfb2 F9 REROLL C\u00c2Y M\u00c0N [{lastLvl}]: [{oldPlant}] \u2794 [{chosen}]!";
+                string notif = $"\ud83c\udfb2 F12 REROLL C\u00c2Y M\u00c0N [{lastLvl}]: [{oldPlant}] \u2794 [{chosen}]!";
                 Plugin.LogSource?.LogInfo(notif);
                 BonusUIManager.ShowNotif(notif, 7f);
             }

@@ -26,9 +26,6 @@
     <Reference Include="Assembly-CSharp">
       <HintPath>..\BepInEx\interop\Assembly-CSharp.dll</HintPath>
     </Reference>
-    <Reference Include="Core">
-      <HintPath>..\BepInEx\interop\Core.dll</HintPath>
-    </Reference>
     <Reference Include="Il2Cppmscorlib">
       <HintPath>..\BepInEx\interop\Il2Cppmscorlib.dll</HintPath>
     </Reference>

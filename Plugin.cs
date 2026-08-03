@@ -64,11 +64,11 @@ namespace PlantsRandomizer
 
             try
             {
-                if (Input.GetKeyDown(KeyCode.F11))
+                if (Input.GetKeyDown(KeyCode.F8))
                 {
                     AwardPatches.RerollCurrentProfileSeed();
                 }
-                if (Input.GetKeyDown(KeyCode.F12))
+                if (Input.GetKeyDown(KeyCode.F9))
                 {
                     AwardPatches.RerollLastLevelPlant();
                 }
@@ -99,7 +99,7 @@ namespace PlantsRandomizer
     [HarmonyPatch]
     public static class AwardPatches
     {
-        private const string CONFIG_VERSION = "1.0.2";
+        private const string CONFIG_VERSION = "1.0.3";
         private static readonly object Sync = new object();
         private static bool _initialized = false;
         private static string _activeProfile = string.Empty;
@@ -128,8 +128,7 @@ namespace PlantsRandomizer
 
         public static readonly int[] SpecialBonusPlantIDs = new int[]
         {
-            34, 220, 222, 223, 229, 235, 237, 238, 241, 242, 243, 248, 249, 252,
-            256, 1027, 1070, 1060, 1067, 1120, 1247
+            34, 220, 222, 223, 229, 235, 237, 238, 241, 242, 243, 248, 249, 252
         };
 
         // Candidate pool for Bonus rewards
@@ -184,24 +183,16 @@ namespace PlantsRandomizer
                     pool.Add(p);
                 }
             }
-            pool.Add((PlantType)256);    // Present
-            pool.Add((PlantType)1027);   // TallNut
-            pool.Add((PlantType)1070);   // GloomShroom
-            pool.Add((PlantType)1060);   // SpikeRock
-            pool.Add((PlantType)1067);   // CattailPlant
-            pool.Add((PlantType)1120);   // CobCannon
-            pool.Add((PlantType)1247);   // SpruceBallista
+            foreach (int id in new int[] { 906, 1027, 1067, 1070, 1120, 1247 })
+            {
+                pool.Add((PlantType)id);
+            }
             return pool.ToArray();
         }
 
-        // ONLY these levels give fixed terrain plants (NOT randomized):
-        // Night6 (2-6, last level before Pool section) -> LilyPad
-        // NightPool6 (4-6, last level before Roof section) -> Pot
-        // All other levels are randomized.
-        public static readonly Dictionary<AdvantureLevel, PlantType> FixedRewardLevels = new()
+        public static readonly HashSet<AdvantureLevel> ExcludedSpecialLevels = new()
         {
-            { AdvantureLevel.Night6, PlantType.LilyPad },
-            { AdvantureLevel.NightPool6, PlantType.Pot }
+            AdvantureLevel.Pool1, AdvantureLevel.Roof1
         };
 
         public static string GetCurrentProfileKey()
@@ -408,15 +399,7 @@ namespace PlantsRandomizer
 
                 if (!found || !LevelToPlantMap.TryGetValue(lastLvl, out PlantType oldPlant))
                 {
-                    string msg = "\u26a0\ufe0f KH\u00d4NG T\u00ccM TH\u1ea4Y M\u00c0N CH\u01a0I \u0110\u1ec2 REROLL!";
-                    Plugin.LogSource?.LogInfo(msg);
-                    BonusUIManager.ShowNotif(msg, 5f);
-                    return;
-                }
-
-                if (FixedRewardLevels.ContainsKey(lastLvl))
-                {
-                    string msg = $"\u26a0\ufe0f M\u00c0N [{lastLvl}] L\u00c0 M\u00c0N TH\u01af\u1edeNG C\u1ed0 \u0110\u1ecaNH ([{oldPlant}]), KH\u00d4NG TH\u1ec2 REROLL!";
+                    string msg = "⚠️ KHÔNG TÌM THẤY MÀN CHƠI ĐỂ REROLL!";
                     Plugin.LogSource?.LogInfo(msg);
                     BonusUIManager.ShowNotif(msg, 5f);
                     return;
@@ -440,7 +423,7 @@ namespace PlantsRandomizer
 
                 SaveMapping(GetCurrentProfileKey());
 
-                string notif = $"\ud83c\udfb2 F12 REROLL C\u00c2Y M\u00c0N [{lastLvl}]: [{oldPlant}] \u2794 [{chosen}]!";
+                string notif = $"🎲 F9 REROLL CÂY MÀN [{lastLvl}]: [{oldPlant}] ➔ [{chosen}]!";
                 Plugin.LogSource?.LogInfo(notif);
                 BonusUIManager.ShowNotif(notif, 7f);
             }
@@ -465,7 +448,7 @@ namespace PlantsRandomizer
                             int.TryParse(line.Substring("# Seed:".Length).Trim(), out newSeed);
                     }
                 }
-                string notif = $"\ud83c\udfb2 \u0110\xc3 T\u1ea0O SEED M\u1edaI TH\u00c0NH C\u00d4NG! (Seed: {newSeed})";
+                string notif = $"🎲 ĐÃ TẠO SEED MỚI THÀNH CÔNG! (Seed: {newSeed})";
                 Plugin.LogSource?.LogInfo(notif);
                 BonusUIManager.ShowNotif(notif, 7f);
             }
@@ -496,7 +479,7 @@ namespace PlantsRandomizer
                     foreach (string line in File.ReadAllLines(configPath))
                     {
                         string t = line.Trim();
-                        if (t.StartsWith("# Version:")) valid = t.Contains(CONFIG_VERSION);
+                        if (t == "# Version: " + CONFIG_VERSION) valid = true;
                         if (t.StartsWith("# Seed:")) int.TryParse(t.Substring("# Seed:".Length).Trim(), out seed);
                         if (t.StartsWith("# SaveCreationTicks:")) long.TryParse(t.Substring("# SaveCreationTicks:".Length).Trim(), out savedCreationTicks);
                         if (string.IsNullOrEmpty(t) || t.StartsWith("#")) continue;
@@ -504,14 +487,8 @@ namespace PlantsRandomizer
                         if (eq > 0 && int.TryParse(t.Substring(0, eq), out int lv) && int.TryParse(t.Substring(eq + 1), out int pv))
                         {
                             var lvl = (AdvantureLevel)lv;
-                            if (FixedRewardLevels.TryGetValue(lvl, out PlantType fixedPlant))
-                            {
-                                LevelToPlantMap[lvl] = fixedPlant;
-                            }
-                            else if (lv >= 1 && lv <= 100)
-                            {
+                            if (!ExcludedSpecialLevels.Contains(lvl) && lv >= 1 && lv <= 100)
                                 LevelToPlantMap[lvl] = (PlantType)pv;
-                            }
                         }
                     }
 
@@ -564,7 +541,7 @@ namespace PlantsRandomizer
             {
                 var lvl = (AdvantureLevel)obj;
                 int n = (int)lvl;
-                if (n >= 1 && n <= 100) levels.Add(lvl);
+                if (n >= 1 && n <= 100 && !ExcludedSpecialLevels.Contains(lvl)) levels.Add(lvl);
             }
 
             var basic = new List<PlantType>(CreateBasicPlantPool());
@@ -576,11 +553,7 @@ namespace PlantsRandomizer
             foreach (var lvl in levels)
             {
                 PlantType chosen;
-                if (FixedRewardLevels.TryGetValue(lvl, out PlantType fixedPlant))
-                {
-                    chosen = fixedPlant;
-                }
-                else if (bi < basic.Count) chosen = basic[bi++];
+                if (bi < basic.Count) chosen = basic[bi++];
                 else if (includeColored && si < super.Count) chosen = super[si++];
                 else { if (bi >= basic.Count) { Shuffle(basic, rand); bi = 0; } chosen = basic[bi++]; }
                 LevelToPlantMap[lvl] = chosen;
@@ -628,53 +601,6 @@ namespace PlantsRandomizer
             return false;
         }
 
-        public static HashSet<PlantType> GetReceivedPlants(AdvantureLevel excludeLevel)
-        {
-            var received = new HashSet<PlantType>();
-            foreach (var kvp in LevelToPlantMap)
-            {
-                if (kvp.Key == excludeLevel) continue;
-                if (IsLevelCompleted(kvp.Key))
-                    received.Add(kvp.Value);
-            }
-            foreach (int id in CurrentData.BonusUnlockedPlants)
-                received.Add((PlantType)id);
-            return received;
-        }
-
-        // Ensures the plant awarded for a just-completed level is NOT a plant already received before.
-        // If the mapped plant is already received, re-rolls to a not-yet-received plant and persists the change.
-        public static PlantType ResolveUniqueRewardForLevel(AdvantureLevel lvl)
-        {
-            EnsureInitialized();
-            if (FixedRewardLevels.TryGetValue(lvl, out PlantType fixedPlant))
-                return fixedPlant;
-            if (!LevelToPlantMap.TryGetValue(lvl, out PlantType current))
-                return current;
-
-            var received = GetReceivedPlants(lvl);
-            if (!received.Contains(current))
-                return current;
-
-            var pool = new List<PlantType>();
-            pool.AddRange(CreateBasicPlantPool());
-            pool.AddRange(CreateBonusPlantPool());
-            var candidates = pool.FindAll(p => !received.Contains(p));
-            if (candidates.Count == 0) return current;
-
-            var rand = new System.Random(Guid.NewGuid().GetHashCode() ^ Environment.TickCount);
-            PlantType chosen = candidates[rand.Next(candidates.Count)];
-            LevelToPlantMap[lvl] = chosen;
-            try
-            {
-                if (AdvantureConfig.unlockLevels != null)
-                    AdvantureConfig.unlockLevels[chosen] = lvl;
-            }
-            catch { }
-            SaveMapping(GetCurrentProfileKey());
-            return chosen;
-        }
-
         public static bool IsPlantUnlocked(PlantType pt)
         {
             if (GameAPP.developerMode) return true;
@@ -682,8 +608,8 @@ namespace PlantsRandomizer
             if (CurrentData.BonusUnlockedPlants.Contains(id)) return true;
 
             if (pt == PlantType.Peashooter || pt == PlantType.SunFlower) return true;
-            if (pt == PlantType.LilyPad) return IsLevelCompleted(AdvantureLevel.Night6);
-            if (pt == PlantType.Pot) return IsLevelCompleted(AdvantureLevel.NightPool6);
+            if (pt == PlantType.LilyPad) return IsLevelCompleted(AdvantureLevel.Pool1);
+            if (pt == PlantType.Pot) return IsLevelCompleted(AdvantureLevel.Roof1);
 
             bool isMapped = false;
             bool anyCompleted = false;
@@ -719,12 +645,6 @@ namespace PlantsRandomizer
         public static void CreateCard_Prefix(ref PlantType theSeedType, ref bool shadow, ref bool quick)
         {
             EnsureInitialized();
-            if (theSeedType == PlantType.LilyPad || theSeedType == PlantType.Pot)
-            {
-                bool unlocked = IsPlantUnlocked(theSeedType);
-                shadow = !unlocked;
-                return;
-            }
             if (OriginalUnlockLevels.TryGetValue(theSeedType, out AdvantureLevel orig) && LevelToPlantMap.TryGetValue(orig, out PlantType rnd))
             {
                 theSeedType = rnd;
@@ -751,8 +671,7 @@ namespace PlantsRandomizer
             AdvantureLevel lvl;
             try { lvl = AdvantureManager.Instance != null ? AdvantureManager.Instance.level : (AdvantureLevel)GameAPP.theBoardLevel; }
             catch { lvl = AdvantureLevel.Day1; }
-            if (LevelToPlantMap.TryGetValue(lvl, out _))
-                theSeedType = ResolveUniqueRewardForLevel(lvl);
+            if (LevelToPlantMap.TryGetValue(lvl, out PlantType rnd)) theSeedType = rnd;
         }
 
         [HarmonyPrefix, HarmonyPatch(typeof(AdvantureConfig), nameof(AdvantureConfig.GetBasicPlantType))]
@@ -795,22 +714,17 @@ namespace PlantsRandomizer
 
                 Plugin.LogSource?.LogInfo($"[Victory] Total wins: {CurrentData.TotalWins}");
 
-                // Chance to receive a Special Bonus Reward Plant when winning ANY level (5% chance or guaranteed on 5-win milestone)
+                // Chance to receive a Special Bonus Reward Plant when winning ANY level (25% chance or guaranteed on 5-win milestone)
                 var rand = new System.Random(Guid.NewGuid().GetHashCode() ^ Environment.TickCount);
-                bool triggerBonus = (CurrentData.TotalWins % 5 == 0) || (rand.Next(100) < 5);
+                bool triggerBonus = (CurrentData.TotalWins % 5 == 0) || (rand.Next(100) < 25);
                 if (triggerBonus)
                 {
                     PlantType? bonusPlant = DoBonusReward();
                     if (bonusPlant.HasValue)
                     {
-                        string notif = $"\ud83c\udf81 B\u1ea0N \u0110\xc3 NH\u1eacN \u0110\u01af\u1ee2C C\xc2Y TH\u01af\u1edeNG \u0110\u1eb6C BI\u1ec6T: [{bonusPlant.Value}]!";
+                        string notif = $"🎁 BẠN ĐÃ NHẬN ĐƯỢC CÂY THƯỞNG ĐẶC BIỆT: [{bonusPlant.Value}]!";
                         Plugin.LogSource?.LogInfo(notif);
-                        try
-                        {
-                            if (Core.InGameText.Instance != null)
-                                Core.InGameText.Instance.ShowText(notif, 5f, false);
-                        }
-                        catch { }
+                        BonusUIManager.ShowNotif(notif, 7f);
                     }
                 }
 
@@ -818,25 +732,14 @@ namespace PlantsRandomizer
                 try { lvl = AdvantureManager.Instance != null ? AdvantureManager.Instance.level : (AdvantureLevel)GameAPP.theBoardLevel; }
                 catch { lvl = AdvantureLevel.Day1; }
 
-                if (LevelToPlantMap.TryGetValue(lvl, out _))
+                if (LevelToPlantMap.TryGetValue(lvl, out PlantType rnd))
                 {
-                    PlantType rnd = ResolveUniqueRewardForLevel(lvl);
-
                     CardUI cu = __result.GetComponent<CardUI>() ?? __result.GetComponentInChildren<CardUI>();
                     if (cu != null)
                     {
                         cu.thePlantType = rnd; cu.theSeedType = (int)rnd;
                         try { cu.ChangeCardSprite(); } catch { }
                     }
-
-                    string notif = $"\ud83c\udf89 B\u1ea0N \u0110\xc3 NH\u1eacN \u0110\u01af\u1ee2C C\xc2Y M\u1edaI: [{rnd}]!";
-                    Plugin.LogSource?.LogInfo(notif);
-                    try
-                    {
-                        if (Core.InGameText.Instance != null)
-                            Core.InGameText.Instance.ShowText(notif, 5f, false);
-                    }
-                    catch { }
                 }
             }
             catch (Exception ex) { Plugin.LogSource?.LogWarning($"SetAward error: {ex.Message}"); }
